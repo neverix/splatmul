@@ -1,44 +1,44 @@
 use half::bf16;
 use std::time::SystemTime;
 
-#[derive(Clone, Copy)]
-pub struct SparseMatmulContext<'a> {
+#[derive(Clone)]
+pub struct SparseMatmulContext {
     pub n: usize,
     pub k: usize,
+    pub l: usize,
     pub m: usize,
-    pub sparse_weights: &'a [bf16],
-    pub sparse_indices: &'a [u32],
-    pub decoder_weights: &'a [bf16],
+    pub sparse_weights: Box<[bf16]>,
+    pub sparse_indices: Box<[u32]>,
+    pub decoder_weights: Box<[bf16]>,
 }
 
-impl SparseMatmulContext<'_> {
-    pub fn new<'a, X: AsRef<[bf16]>, Y: AsRef<[u32]>, Z: AsRef<[bf16]>>(
+impl SparseMatmulContext {
+    pub fn from_vec(
         n: usize,
         k: usize,
+        l: usize,
         m: usize,
-        sparse_weights: &'a X,
-        sparse_indices: &'a Y,
-        decoder_weights: &'a Z,
-    ) -> SparseMatmulContext<'a> {
+        sparse_weights: Vec<bf16>,
+        sparse_indices: Vec<u32>,
+        decoder_weights: Vec<bf16>,
+    ) -> SparseMatmulContext {
         SparseMatmulContext {
             n,
             k,
+            l,
             m,
-            sparse_weights: sparse_weights.as_ref(),
-            sparse_indices: sparse_indices.as_ref(),
-            decoder_weights: decoder_weights.as_ref(),
+            sparse_weights: sparse_weights.into_boxed_slice(),
+            sparse_indices: sparse_indices.into_boxed_slice(),
+            decoder_weights: decoder_weights.into_boxed_slice(),
         }
     }
 }
 
-pub fn benchmark<'a, T>(
-    fun: fn(SparseMatmulContext) -> T,
-    ctx: SparseMatmulContext<'a>,
-    fun_name: &str,
-) {
+pub fn benchmark<T>(fun: fn(&SparseMatmulContext) -> T, ctx: &SparseMatmulContext, fun_name: &str) -> T {
     println!("Benchmarking {}", fun_name);
     let start = SystemTime::now();
-    fun(ctx);
+    let result = fun(ctx);
     let elapsed = start.elapsed().unwrap();
     println!("Elapsed time for {}: {:?}", fun_name, elapsed);
+    result
 }

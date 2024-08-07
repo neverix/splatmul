@@ -3,7 +3,7 @@ use half::bf16;
 use ndarray::{Array1, ArrayView};
 use rayon::prelude::*;
 
-pub fn ugly_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Array1<bf16>> {
+pub fn ugly_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<Array1<bf16>> {
     (0..ctx.n)
         .into_par_iter()
         .map(|n| {
@@ -26,7 +26,7 @@ pub fn ugly_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Array1<bf16>
         .collect()
 }
 
-pub fn naive_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Vec<bf16>> {
+pub fn naive_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<Vec<bf16>> {
     (0..ctx.n)
         .into_par_iter()
         .map(|n| {
