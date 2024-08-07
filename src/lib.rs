@@ -47,10 +47,10 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         let k = sparse_weights.as_array().shape()[1];
         let l = sparse_indices.as_array().shape()[1];
         let m = decoder_weights.as_array().shape()[1];
-        let result = {
-            let sparse_weights_slice = sparse_weights.as_slice().unwrap();
-            let sparse_indices_slice = sparse_indices.as_slice().unwrap();
-            let decoder_weights_slice = decoder_weights.as_slice().unwrap();
+        let sparse_weights_slice = sparse_weights.as_slice().unwrap();
+        let sparse_indices_slice = sparse_indices.as_slice().unwrap();
+        let decoder_weights_slice = decoder_weights.as_slice().unwrap();
+        let result = Python::allow_threads(py, move || {
             let ctx = SparseMatmulContext {
                 n: n as usize,
                 k: k as usize,
@@ -64,7 +64,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 .into_iter()
                 .map(|x| x.to_bits())
                 .collect()
-        };
+        });
         PyArrayDyn::from_owned_array_bound(
             py,
             Array2::from_shape_vec([n, m], result).unwrap().into_dyn(),
