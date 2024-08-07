@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::mem::MaybeUninit;
 use std::simd::prelude::*;
 
-fn transmute_bf16_to_u16(bf16: &[bf16]) -> &[u16] {
+pub fn transmute_bf16_to_u16(bf16: &[bf16]) -> &[u16] {
     unsafe { std::mem::transmute::<&[bf16], &[u16]>(bf16) }
 }
 
