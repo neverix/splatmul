@@ -34,7 +34,11 @@ impl SparseMatmulContext {
     }
 }
 
-pub fn benchmark<T>(fun: fn(&SparseMatmulContext) -> T, ctx: &SparseMatmulContext, fun_name: &str) -> T {
+pub fn benchmark<T>(
+    fun: fn(&SparseMatmulContext) -> T,
+    ctx: &SparseMatmulContext,
+    fun_name: &str,
+) -> T {
     println!("Benchmarking {}", fun_name);
     let start = SystemTime::now();
     let result = fun(ctx);
