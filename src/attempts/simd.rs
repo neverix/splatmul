@@ -9,7 +9,7 @@ fn transmute_bf16_to_u16(bf16: &[bf16]) -> &[u16] {
     unsafe { std::mem::transmute::<&[bf16], &[u16]>(bf16) }
 }
 
-pub fn unsafe_alloc_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<bf16> {
+pub fn unsafe_alloc_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<bf16> {
     let mut v = Vec::<bf16>::with_capacity(ctx.n * ctx.m);
     v.spare_capacity_mut()
         .par_chunks_mut(ctx.m)
@@ -43,7 +43,7 @@ fn transmute_u16_to_bf16_owned<const S: usize>(u16: [u16; S]) -> [bf16; S] {
     u16.map(|x| unsafe { std::mem::transmute::<u16, bf16>(x) })
 }
 
-pub fn simd_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<Vec<[bf16; 64]>> {
+pub fn simd_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Vec<[bf16; 64]>> {
     (0..ctx.n)
         .into_par_iter()
         .map(|n| {

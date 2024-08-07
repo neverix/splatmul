@@ -2,7 +2,7 @@ use crate::benchmarking::SparseMatmulContext;
 use half::bf16;
 use rayon::prelude::*;
 
-pub fn limit_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<Vec<bf16>> {
+pub fn limit_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Vec<bf16>> {
     (0..ctx.n)
         .into_par_iter()
         .map(|n| {
@@ -24,13 +24,13 @@ pub fn limit_parallel_sparse_matmul(ctx: &SparseMatmulContext) -> Vec<Vec<bf16>>
         .collect()
 }
 
-pub fn alloc_lower_bound(ctx: &SparseMatmulContext) -> Vec<Vec<bf16>> {
+pub fn alloc_lower_bound(ctx: SparseMatmulContext) -> Vec<Vec<bf16>> {
     (0..ctx.n)
         .into_par_iter()
         .map(|_| vec![bf16::default(); ctx.m])
         .collect()
 }
 
-pub fn alloc_uninit_sync(ctx: &SparseMatmulContext) -> Box<[bf16]> {
+pub fn alloc_uninit_sync(ctx: SparseMatmulContext) -> Box<[bf16]> {
     Vec::<bf16>::with_capacity(ctx.n * ctx.m).into_boxed_slice()
 }
