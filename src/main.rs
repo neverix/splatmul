@@ -1,19 +1,16 @@
 #![feature(array_chunks)]
 #![feature(portable_simd)]
-use std::array;
-
 use rand_distr::Uniform;
 use rand::Rng;
 
 use rayon::prelude::*;
-use half::{bf16, vec};
+use half::bf16;
 
 
 const N: usize = 1 << 20;
 const K: usize = 64;
 const L: usize = 1 << 20;
 const M: usize = 1 << 14;
-const RANDOM_CHUNK: usize = 1 << 10;
 
 
 fn generate_weights<const S: usize>(scale: f32) -> Vec<bf16> {
