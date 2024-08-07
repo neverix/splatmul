@@ -12,21 +12,21 @@ pub struct SparseMatmulContext<'a> {
 }
 
 impl SparseMatmulContext<'_> {
-    pub fn from_vectors<'a>(
+    pub fn new<'a, X: AsRef<[bf16]>, Y: AsRef<[u32]>, Z: AsRef<[bf16]>>(
         n: usize,
         k: usize,
         m: usize,
-        sparse_weights: &'a Vec<bf16>,
-        sparse_indices: &'a Vec<u32>,
-        decoder_weights: &'a Vec<bf16>,
+        sparse_weights: &'a X,
+        sparse_indices: &'a Y,
+        decoder_weights: &'a Z,
     ) -> SparseMatmulContext<'a> {
         SparseMatmulContext {
             n,
             k,
             m,
-            sparse_weights: sparse_weights.as_slice(),
-            sparse_indices: sparse_indices.as_slice(),
-            decoder_weights: decoder_weights.as_slice(),
+            sparse_weights: sparse_weights.as_ref(),
+            sparse_indices: sparse_indices.as_ref(),
+            decoder_weights: decoder_weights.as_ref(),
         }
     }
 }

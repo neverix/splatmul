@@ -20,7 +20,7 @@ fn main() {
     let decoder_weights = generate_weights(l * m, scale);
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
 
-    let ctx = splatmul::benchmarking::SparseMatmulContext::from_vectors(
+    let ctx = splatmul::benchmarking::SparseMatmulContext::new(
         n,
         k,
         m,
