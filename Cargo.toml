@@ -3,6 +3,10 @@ name = "splatmul"
 version = "0.1.0"
 edition = "2021"
 
+[build]
+target = "x86_64-unknown-linux-gnu"
+flags = ["-C", "target-cpu=native"]
+
 [dependencies]
 half = "2.4.1"
 indicatif = { version = "0.17.8", features = ["rayon"] }
