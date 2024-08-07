@@ -1,4 +1,3 @@
-use half::bf16;
 use std::simd::prelude::*;
 
 pub fn simd_bf16_to_f32(bf16: u16x64) -> f32x64 {
@@ -30,6 +29,7 @@ pub fn simd_f32_to_bf16(f32: f32x64) -> u16x64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use half::bf16;
 
     fn check_f32_to_bf16(num: f32) {
         let simd_f32 = f32x64::splat(num);
