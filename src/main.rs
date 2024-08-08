@@ -14,14 +14,14 @@ use splatmul::attempts::{naive_parallel_sparse_matmul, ugly_parallel_sparse_matm
 use splatmul::attempts::{simd_parallel_sparse_matmul, unsafe_alloc_parallel_sparse_matmul};
 use splatmul::types::{DecoderGradientType, WeightGradientType};
 
-const N: usize = 1 << 20;
-const K: usize = 64;
-const L: usize = 1 << 20;
-const M: usize = 1 << 14;
-// const N: usize = 1 << 15;
+// const N: usize = 1 << 20;
 // const K: usize = 64;
-// const L: usize = 1 << 12;
+// const L: usize = 1 << 20;
 // const M: usize = 1 << 14;
+const N: usize = 1 << 15;
+const K: usize = 64;
+const L: usize = 1 << 12;
+const M: usize = 1 << 14;
 
 macro_rules! time_fn {
     ($e: expr) => {{
@@ -69,44 +69,52 @@ fn compute_grads(ctx: &BackwardPassContext) -> Vec<DecoderGradientType> {
     v
 }
 
-const M_CHUNK: usize = 1 << 6;
-// const M_CHUNK: usize = 1 << 2;
+const M_CHUNK: usize = 1 << 9;
 
 fn weight_grads(ctx: &BackwardPassContext, decoder_grads: &[DecoderGradientType]) -> Vec<WeightGradientType> {
     let lm = ctx.l * ctx.m;
     let mut v = Vec::<WeightGradientType>::with_capacity(lm * 2);
-    let decoder_offset = lm;
     v.spare_capacity_mut()
-        // .par_chunks_mut(ctx.l * M_CHUNK)
-        .chunks_mut(ctx.l * M_CHUNK)
-        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
+        .par_chunks_mut(M_CHUNK)
         .enumerate()
-        .for_each(|(m_start, outputs)| {
-            let is_decoder = m_start >= decoder_offset;
-            let real_m_start = if is_decoder { m_start - decoder_offset } else { m_start };
-            for l in (0..ctx.l).progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap()) {
-                let mut grad_accum = Array::from_elem((M_CHUNK,), 0f32);
-                for n in 0..ctx.n {
-                    let big_elem = if is_decoder {
-                        compute_output_gradient_slice(ctx, n, real_m_start, real_m_start + M_CHUNK)
-                    } else {
-                        let input_embeds_i8 = &ctx.input_embeds[n * ctx.m..(n + 1) * ctx.m][real_m_start..real_m_start + M_CHUNK];
-                        let input_embeds_f32 = ArrayView::from_shape((M_CHUNK,), input_embeds_i8).unwrap().mapv(|x| (x as f32) / 127.5);
-                        input_embeds_f32
-                    };
-                    for k in 0..ctx.k {
-                        let small_elem = if is_decoder { 
-                            ctx.sparse_weights[n * ctx.k + k].to_f32()
-                         } else {
-                            decoder_grads[n * ctx.k + k] as f32
-                         };
-                         grad_accum += &(&(&big_elem * small_elem) / (ctx.n as f32));
+        // .chunks_mut(M_CHUNK)
+        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
+        .for_each(|(sl_start, outputs)| {
+            let l = (sl_start * M_CHUNK) / (ctx.m * 2);
+            let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
+            let is_decoder = m_start >= ctx.m;
+            let real_m_start = if is_decoder { m_start - ctx.m } else { m_start };
+            let mut grad_accum = Array::from_elem((M_CHUNK,), 0f32);
+            for n in 0..ctx.n {
+                let mut big_elem: Box<Option<Array<f32, Dim<[usize; 1]>>>> = Box::new(None);
+                for k in 0..ctx.k {
+                    let l_idx = ctx.sparse_indices[n * ctx.k + k];
+                    if l != l_idx as usize {
+                        continue;
                     }
+
+                    let is_none = (&big_elem).is_none();
+                    if is_none {
+                        big_elem = Box::new(Some(if is_decoder {
+                            compute_output_gradient_slice(ctx, n, real_m_start, real_m_start + M_CHUNK)
+                        } else {
+                            let input_embeds_i8 = &ctx.input_embeds[n * ctx.m + real_m_start..n * ctx.m + real_m_start + M_CHUNK];
+                            let input_embeds_f32 = ArrayView::from_shape((M_CHUNK,), input_embeds_i8).unwrap().mapv(|x| (x as f32) / 127.5);
+                            input_embeds_f32
+                        }));
+                    }
+                    let small_elem = if is_decoder { 
+                        ctx.sparse_weights[n * ctx.k + k].to_f32()
+                    } else {
+                        decoder_grads[n * ctx.k + k] as f32
+                    };
+                    let elem = big_elem.clone().unwrap() * small_elem;
+                    grad_accum += &(&elem / (ctx.n as f32));
                 }
-                let grad_slice = grad_accum.as_slice().unwrap();
-                let grad_slice_bf16_uninit = grad_slice.into_iter().map(|&x| MaybeUninit::new(bf16::from_f32(x))).collect::<Vec<MaybeUninit<bf16>>>();
-                outputs[l * ctx.m + m_start .. l * ctx.m + m_start + M_CHUNK].copy_from_slice(grad_slice_bf16_uninit.as_slice());
             }
+            let grad_slice = grad_accum.as_slice().unwrap();
+            let grad_slice_bf16_uninit = grad_slice.into_iter().map(|&x| MaybeUninit::new(bf16::from_f32(x))).collect::<Vec<MaybeUninit<bf16>>>();
+            outputs.copy_from_slice(grad_slice_bf16_uninit.as_slice());
         });
     unsafe { v.set_len(lm * 2) };
     v
