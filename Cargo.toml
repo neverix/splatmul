@@ -8,8 +8,18 @@ name = "splatmul"
 crate-type = ["cdylib", "lib"]
 
 [build]
-target = "x86_64-unknown-linux-gnu"
+# target = "x86_64-unknown-linux-gnu"
 flags = ["-C", "target-cpu=native"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-unit = 1
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = 3
+codegen-unit = 1
 
 [dependencies]
 half = "2.4.1"

@@ -1,6 +1,7 @@
 use crate::benchmarking::SparseMatmulContext;
 use crate::conversions::{simd_bf16_to_f32, simd_f32_to_bf16};
 use half::bf16;
+use indicatif::{style, ParallelProgressIterator};
 use rayon::prelude::*;
 use std::mem::MaybeUninit;
 use std::simd::prelude::*;
@@ -13,6 +14,7 @@ pub fn unsafe_alloc_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<bf16
     let mut v = Vec::<bf16>::with_capacity(ctx.n * ctx.m);
     v.spare_capacity_mut()
         .par_chunks_mut(ctx.m)
+        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
         .enumerate()
         .for_each(|(n, outputs)| {
             for m_start in (0..ctx.m).step_by(64) {
