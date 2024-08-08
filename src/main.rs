@@ -14,14 +14,14 @@ use splatmul::attempts::{naive_parallel_sparse_matmul, ugly_parallel_sparse_matm
 use splatmul::attempts::{simd_parallel_sparse_matmul, unsafe_alloc_parallel_sparse_matmul};
 use splatmul::types::{DecoderGradientType, WeightGradientType};
 
-// const N: usize = 1 << 20;
-// const K: usize = 64;
-// const L: usize = 1 << 20;
-// const M: usize = 1 << 14;
-const N: usize = 1 << 15;
+const N: usize = 1 << 20;
 const K: usize = 64;
-const L: usize = 1 << 12;
+const L: usize = 1 << 20;
 const M: usize = 1 << 14;
+// const N: usize = 1 << 15;
+// const K: usize = 64;
+// const L: usize = 1 << 12;
+// const M: usize = 1 << 14;
 
 macro_rules! time_fn {
     ($e: expr) => {{
@@ -69,7 +69,52 @@ fn compute_grads(ctx: &BackwardPassContext) -> Vec<DecoderGradientType> {
     v
 }
 
-const M_CHUNK: usize = 1 << 9;
+const M_CHUNK: usize = 1 << 7;
+
+fn weight_grads_fast(ctx: &BackwardPassContext, decoder_grads: &[DecoderGradientType]) -> Vec<WeightGradientType> {
+    let lm = ctx.l * ctx.m;
+    let mut output_grads = (0..lm * 2).into_par_iter().map(|_| bf16::ZERO).collect::<Vec<WeightGradientType>>();
+    output_grads
+        .par_chunks_mut(M_CHUNK * ctx.l)
+        .enumerate()
+        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
+        .for_each(|(sl_start, outputs)| {
+            let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
+            let is_decoder = m_start >= ctx.m;
+            let real_m_start = if is_decoder { m_start - ctx.m } else { m_start };
+            for n in 0..ctx.n {
+                let mut big_elem: Box<Option<Array<f32, Dim<[usize; 1]>>>> = Box::new(None);
+                for k in 0..ctx.k {
+                    let l = ctx.sparse_indices[n * ctx.k + k] as usize;
+
+                    let is_none = (&big_elem).is_none();
+                    if is_none {
+                        big_elem = Box::new(Some(if is_decoder {
+                            compute_output_gradient_slice(ctx, n, real_m_start, real_m_start + M_CHUNK)
+                        } else {
+                            let input_embeds_i8 = &ctx.input_embeds[n * ctx.m + real_m_start..n * ctx.m + real_m_start + M_CHUNK];
+                            let input_embeds_f32 = ArrayView::from_shape((M_CHUNK,), input_embeds_i8).unwrap().mapv(|x| (x as f32) / 127.5);
+                            input_embeds_f32
+                        }));
+                    }
+                    let small_elem = if is_decoder { 
+                        ctx.sparse_weights[n * ctx.k + k].to_f32()
+                    } else {
+                        decoder_grads[n * ctx.k + k] as f32
+                    };
+                    let elem = big_elem.clone().unwrap() * small_elem;
+                    let grad_addition = &(&elem / (ctx.n as f32));
+                    
+                    let current_grad = outputs[l..l + M_CHUNK].iter().map(|x| x.to_f32()).collect::<Vec<f32>>();
+                    let current_grad_array = ArrayView::from_shape((M_CHUNK,), &current_grad).unwrap();
+                    let grad_new = grad_addition + &current_grad_array;
+                    let grad_slice = grad_new.as_slice().unwrap();
+                    outputs[l..l + M_CHUNK].copy_from_slice(grad_slice.into_iter().map(|&x| bf16::from_f32(x)).collect::<Vec<bf16>>().as_slice());
+                }
+            }
+        });
+    output_grads
+}
 
 fn weight_grads(ctx: &BackwardPassContext, decoder_grads: &[DecoderGradientType]) -> Vec<WeightGradientType> {
     let lm = ctx.l * ctx.m;
@@ -77,7 +122,6 @@ fn weight_grads(ctx: &BackwardPassContext, decoder_grads: &[DecoderGradientType]
     v.spare_capacity_mut()
         .par_chunks_mut(M_CHUNK)
         .enumerate()
-        // .chunks_mut(M_CHUNK)
         .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
         .for_each(|(sl_start, outputs)| {
             let l = (sl_start * M_CHUNK) / (ctx.m * 2);
@@ -89,11 +133,13 @@ fn weight_grads(ctx: &BackwardPassContext, decoder_grads: &[DecoderGradientType]
                 let mut big_elem: Box<Option<Array<f32, Dim<[usize; 1]>>>> = Box::new(None);
                 for k in 0..ctx.k {
                     let l_idx = ctx.sparse_indices[n * ctx.k + k];
+                    // how to get a branch misprediction 101:
                     if l != l_idx as usize {
                         continue;
                     }
 
                     let is_none = (&big_elem).is_none();
+                    // how to get a cache miss 101:
                     if is_none {
                         big_elem = Box::new(Some(if is_decoder {
                             compute_output_gradient_slice(ctx, n, real_m_start, real_m_start + M_CHUNK)
@@ -124,10 +170,14 @@ fn backward(ctx: &BackwardPassContext) {
     println!("Benchmarking compute_grads...");
     let decoder_grads = time_fn!(compute_grads(&ctx));
     println!("First decoder grads: {:?}", &decoder_grads[0..32]);
-    println!("Benchmarking weight_grads...");
-    let weight_grads = time_fn!(weight_grads(&ctx, &decoder_grads));
+    println!("Benchmarking weight_grads_fast...");
+    let weight_grads = time_fn!(weight_grads_fast(&ctx, &decoder_grads));
     println!("First encoder weight grads: {:?}", &weight_grads[0..32]);
-    println!("First decoder weight grads: {:?}", &weight_grads[ctx.m..ctx.m + 32]);
+    println!("First decoder weight grads: {:?}", &weight_grads[ctx.l * M_CHUNK..ctx.l * M_CHUNK + 32]);
+    // println!("Benchmarking weight_grads...");
+    // let weight_grads = time_fn!(weight_grads(&ctx, &decoder_grads));
+    // println!("First encoder weight grads: {:?}", &weight_grads[0..32]);
+    // println!("First decoder weight grads: {:?}", &weight_grads[ctx.m..ctx.m + 32]);
 }
 
 fn main() {
