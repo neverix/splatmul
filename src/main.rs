@@ -47,8 +47,8 @@ fn main() {
     time_fn!({
         let grads = generate_weights(N * M, scale);
         adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
-        adam.update(grads.as_slice(), encoder_weights.as_mut_slice());
     });
+    return;
 
     let input_data = generate_data(N * M);
     println!("First input data: {:?}", &input_data[0..32]);
