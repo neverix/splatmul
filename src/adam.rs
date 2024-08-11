@@ -1,9 +1,12 @@
 use std::cmp::min;
 
 use half::bf16;
+use ndarray::{Array1, ArrayView, ArrayView1, ArrayViewMut1};
 use pyo3::prelude::*;
-use rayon::{iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator}, slice::ParallelSliceMut};
+use rayon::{iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator}, slice::{ParallelSlice, ParallelSliceMut}};
 use staticsort::staticsort;
+
+use crate::generate::generate_weights;
 
 
 const fn generate_dtq_lut(signed: bool, divisor: f32) -> [f32; 256] {
@@ -163,6 +166,7 @@ fn test_dtq_conv_unsigned() {
 
 
 #[pyclass]
+#[derive(Clone)]
 pub struct BlockScaled {
     scales: Vec<f32>,
     block: Vec<u8>,
@@ -196,10 +200,22 @@ impl BlockScaled {
         let is_signed = self.signed;
         self.par_for_each(|block_chunk, scale, i| {
             let mut f32_chunk = block_chunk.iter().map(|&x| dtq_to_f32(x, is_signed) * (*scale)).collect::<Vec<f32>>();
-            visitor(f32_chunk.as_mut_slice(), 0);
+            visitor(f32_chunk.as_mut_slice(), i);
             let new_scale = f32_chunk.iter().map(|&x| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
             block_chunk.copy_from_slice(&f32_chunk.iter().map(|&x| f32_to_dtq(x / new_scale, is_signed)).collect::<Vec<u8>>());
         });
+    }
+
+    pub fn par_array_for_each(&mut self, visitor: impl Fn(&mut ArrayViewMut1<f32>, usize) + Sync) {
+        let block_size = self.block_size;
+        self.par_f32_for_each(|f32_chunk, i| {
+            let mut array = ArrayViewMut1::from_shape((block_size,), f32_chunk).unwrap();
+            visitor(&mut array, i);
+        });
+    }
+
+    pub fn par_iter(&self) -> impl IndexedParallelIterator<Item = f32> + '_ {
+        (0..self.block.len()).into_par_iter().map(|i| dtq_to_f32(self.block[i], self.signed) * self.scales[i / self.block_size])
     }
 }
 
@@ -210,14 +226,14 @@ pub struct AdamState {
     pub beta2: f32,
     pub epsilon: f32,
     block_size: usize,
-    length: usize,
     pub m: Option<BlockScaled>,
     pub v: BlockScaled,
     pub t: u64,
 }
 
 impl AdamState {
-    pub fn new(learning_rate: f32, beta1: f32, beta2: f32, epsilon: f32, length: usize, block_size: usize, use_momentum: bool) -> Self {
+    pub fn new(learning_rate: f32, beta1: f32, beta2: f32, epsilon: f32, length: usize, block_size: usize) -> Self {
+        let use_momentum = beta1 > 0.0;
         let m = match use_momentum {
             true => Some(BlockScaled::from_elem(length, block_size, 0f32, true)),
             false => None,
@@ -230,7 +246,6 @@ impl AdamState {
             beta2,
             epsilon,
             block_size,
-            length,
             m,
             v,
             t,
@@ -240,15 +255,51 @@ impl AdamState {
     pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16]) {
         // update i
         self.t += 1;
+        println!("update m");
         // update m (if present)
         if let Some(ref mut m) = self.m {
-            m.par_f32_for_each(|m_chunk, i| {
-                
+            m.par_array_for_each(|m_chunk, i| {
+                *m_chunk *= self.beta1;
+                let mut grad_array = ArrayView1::from_shape((self.block_size,), &gradients[i..i+self.block_size]).unwrap().mapv(|x| x.to_f32());
+                grad_array *= 1.0 - self.beta1;
+                *m_chunk += &grad_array;
             });
         }
+        println!("update v");
         // update v
-        self.v.par_f32_for_each(|v_chunk, i| {
-            
+        self.v.par_array_for_each(|v_chunk, i| {
+            v_chunk.mapv_inplace(|x| x * self.beta2);
+            let grad_array = ArrayView1::from_shape((self.block_size,), &gradients[i..i+self.block_size]).unwrap().mapv(|x| x.to_f32().powi(2) * (1.0 - self.beta2));
+            *v_chunk += &grad_array;
         });
+        println!("update parameters");
+        // update parameters
+        if let Some(ref m) = self.m {
+            parameters.par_iter_mut().zip(m.par_iter()).zip(self.v.par_iter()).for_each(|((parameter, m), v)| {
+                let m_hat = m / (1.0 - self.beta1.powi(self.t as i32));
+                let v_hat = v / (1.0 - self.beta2.powi(self.t as i32));
+                let update = self.learning_rate * m_hat / (v_hat.sqrt() + self.epsilon);
+                *parameter = bf16::from_f32(parameter.to_f32() - update);
+            });
+        } else {
+            parameters.par_iter_mut().zip(gradients.into_par_iter()).zip(self.v.par_iter()).for_each(|((parameter, &gradient), v)| {
+                let gradient = gradient.to_f32();
+                let v_hat = v / (1.0 - self.beta2.powi(self.t as i32));
+                let update = self.learning_rate * gradient / (v_hat.sqrt() + self.epsilon);
+                *parameter = bf16::from_f32(parameter.to_f32() - update);
+            });
+        }
+    }
+}
+
+#[test]
+fn test_adam_momentum_state() {
+    let length = 1 << 10;
+    let mut state = AdamState::new(1e-2, 0.9, 0.9, 1e-10, length, 64);
+    let mut parameters = vec![bf16::ZERO; 1 << 10];
+    for i in 0..100 {
+        let gradients = generate_weights(length, 0.1);
+        state.update(&gradients, &mut parameters);
+        println!("Step {}; first 32 parameters: {:?}", i, &parameters[0..32]);
     }
 }
