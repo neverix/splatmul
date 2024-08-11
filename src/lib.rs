@@ -1,3 +1,8 @@
+// for DTQ
+#![feature(const_trait_impl)]
+#![feature(const_fn_floating_point_arithmetic)]
+#![feature(const_mut_refs)]
+
 #![feature(portable_simd)]
 #![feature(new_uninit)]
 pub mod attempts;
@@ -6,6 +11,7 @@ pub mod conversions;
 pub mod generate;
 pub mod types;
 pub mod backward;
+pub mod adam;
 
 use attempts::unsafe_alloc_parallel_sparse_matmul;
 use benchmarking::SparseMatmulContext;

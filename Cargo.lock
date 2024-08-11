@@ -660,6 +660,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "rayon",
+ "staticsort",
 ]
 
 [[package]]
@@ -667,6 +668,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "staticsort"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "688f0f891e02471bf98f8c43e3a7092086b0333e084ab8b669fc0773991fbcb2"
 
 [[package]]
 name = "syn"

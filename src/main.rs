@@ -30,10 +30,11 @@ fn main() {
     println!("First indices: {:?}", &sparse_indices[0..32]);
 
     let scale = 1.0 / (M as f32).sqrt();
-    let mut encoder_weights = {
-        let encoder_weights_transpose = generate_orthogonal(M, N, scale);
-        (0..N*M).map(|i| encoder_weights_transpose[i % M * N + i / M]).collect::<Vec<bf16>>()
-    };
+    // let mut encoder_weights = {
+    //     let encoder_weights_transpose = generate_orthogonal(M, N, scale);
+    //     (0..N*M).map(|i| encoder_weights_transpose[i % M * N + i / M]).collect::<Vec<bf16>>()
+    // };
+    let mut encoder_weights = generate_weights(N * M, scale);
     println!("First encoder weights: {:?}", &encoder_weights[0..32]);
     let mut decoder_weights = encoder_weights.clone();
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
