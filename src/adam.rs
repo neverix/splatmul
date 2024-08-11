@@ -2,9 +2,9 @@ use std::{cmp::min, simd::{cmp::SimdPartialOrd, f32x16, f32x64, num::SimdFloat, 
 
 use half::{bf16, slice::HalfFloatSliceExt, vec};
 use indicatif::ParallelProgressIterator;
-use ndarray::{Array1, ArrayView, ArrayView1, ArrayViewMut1};
+use ndarray::{Array1, ArrayView, ArrayView1, ArrayViewMut1, ArrayViewMut2, Axis};
 use pyo3::prelude::*;
-use rayon::{iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator}, slice::{ParallelSlice, ParallelSliceMut}};
+use rayon::{iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator}, slice::{ParallelSlice, ParallelSliceMut}};
 use staticsort::staticsort;
 
 use crate::{generate::generate_weights, make_progress};
@@ -200,11 +200,13 @@ pub struct BlockScaled<const SIGNED: bool> {
     block_size: usize,
 }
 
-const CHUNK_CHUNK: usize = 32;
+const CHUNK_CHUNK: usize = 64;
+const ADAM_FLOOR: f32 = 1e-8;
 
 impl<const SIGNED: bool> BlockScaled<SIGNED> {
     pub fn from_elem(length: usize, block_size: usize, value: f32) -> Self {
-        assert!(length % block_size == 0, "length must be a multiple of block_size");
+        assert!(length % (block_size * CHUNK_CHUNK) == 0, "length must be a multiple of block_size");
+        assert!(length >= (block_size * CHUNK_CHUNK), "length must be greater than block_size");
         let num_blocks = length / block_size;
         let scale = 1f32.max(value);
         // let scales = vec![scale; num_blocks];
@@ -228,25 +230,21 @@ impl<const SIGNED: bool> BlockScaled<SIGNED> {
 
     #[inline]
     pub fn par_f32_for_each(&mut self, visitor: impl Fn(&mut [f32], usize) + Sync) {
-        // let mutexes = (std::sync::Mutex::new(0.), std::sync::Mutex::new(0.), std::sync::Mutex::new(0.), std::sync::Mutex::new(0.));
+        let block_size = self.block_size;
         self.par_for_each(|block_chunk, scale, i| {
-            // let t0 = SystemTime::now();
-            let scale = *scale;
-            let mut f32_chunk = block_chunk.iter().map(|&x| dtq_to_f32::<SIGNED>(x) * scale).collect::<Vec<f32>>();
-            // let t1 = SystemTime::now();
-            visitor(f32_chunk.as_mut_slice(), i);
-            // let t2 = SystemTime::now();
-            let new_scale = f32_chunk.iter().map(|&x| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-            // let t3 = SystemTime::now();
-            block_chunk.copy_from_slice(&f32_chunk.iter().map(|&x| f32_to_dtq::<SIGNED>(x / new_scale)).collect::<Vec<u8>>());
-            // let t4 = SystemTime::now();
-            // *mutexes.0.lock().unwrap() += t1.duration_since(t0).unwrap().as_secs_f32() as f64 * 1e3;
-            // *mutexes.1.lock().unwrap() += t2.duration_since(t1).unwrap().as_secs_f32() as f64 * 1e3;
-            // *mutexes.2.lock().unwrap() += t3.duration_since(t2).unwrap().as_secs_f32() as f64 * 1e3;
-            // *mutexes.3.lock().unwrap() += t4.duration_since(t3).unwrap().as_secs_f32() as f64 * 1e3;
+            let chunk_array = ArrayViewMut2::from_shape((CHUNK_CHUNK, block_size), block_chunk).unwrap();
+            let scale_array = ArrayViewMut2::from_shape((CHUNK_CHUNK, 1), scale).unwrap();
+            let chunk_array_f32 = chunk_array.mapv(|x| dtq_to_f32::<SIGNED>(x));
+            let mut scaled_chunk_array_f32 = chunk_array_f32 * &scale_array;
+            scaled_chunk_array_f32.axis_iter_mut(ndarray::Axis(0)).enumerate().for_each(|(j, mut array)| {
+                visitor(array.as_slice_mut().unwrap(), i + j * block_size);
+            });
+            let new_scale = scaled_chunk_array_f32.abs().map_axis(Axis(1), |x| ADAM_FLOOR.max(*x.into_iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()));
+            scaled_chunk_array_f32 /= &new_scale.to_shape([CHUNK_CHUNK, 1]).unwrap().to_owned();
+            let chunk_dtq = scaled_chunk_array_f32.mapv(|x| f32_to_dtq::<SIGNED>(x));
+            block_chunk.copy_from_slice(&chunk_dtq.as_slice().unwrap());
+            scale.copy_from_slice(&new_scale.as_slice().unwrap());
         });
-        // let mutexes_arr = vec![&mutexes.0, &mutexes.1, &mutexes.2, &mutexes.3];
-        // println!("{:?}", mutexes_arr.iter().map(|x| *x.lock().unwrap()).collect::<Vec<f64>>());
     }
 
     #[inline]
@@ -342,12 +340,14 @@ impl AdamState {
 
 #[test]
 fn test_adam_momentum_state() {
-    let length = 1 << 10;
-    let mut state = AdamState::new(1e-2, 0.9, 0.9, 1e-10, length, 64);
+    let length = 1 << 12;
+    let mut state = AdamState::new(1e-1, 0.9, 0.9, 1e-10, length, 64);
     let mut parameters = vec![bf16::ZERO; length];
-    for i in 0..100 {
-        let gradients = generate_weights(length, 0.1);
+    for i in 0..1001 {
+        let gradients = parameters.par_iter().enumerate().map(|(i, x)| bf16::from_f32(x.to_f32() - (i % 14) as f32)).collect::<Vec<bf16>>();
         state.update(&gradients, &mut parameters);
-        println!("Step {}; first 32 parameters: {:?}", i, &parameters[0..32]);
+        if i % 100 == 0 {
+            println!("Step {}; first 32 parameters: {:?}", i, &parameters[0..32]);
+        }
     }
 }
