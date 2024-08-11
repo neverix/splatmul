@@ -1,6 +1,8 @@
 use std::cmp::min;
 
+use half::bf16;
 use pyo3::prelude::*;
+use rayon::{iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator}, slice::ParallelSliceMut};
 use staticsort::staticsort;
 
 
@@ -172,15 +174,32 @@ impl BlockScaled {
     pub fn from_elem(length: usize, block_size: usize, value: f32, signed: bool) -> Self {
         assert!(length % block_size == 0, "length must be a multiple of block_size");
         let num_blocks = length / block_size;
-        let scales = vec![value; num_blocks];
-        let value_dtq = f32_to_dtq(value, signed);
-        let block = vec![f32_to_dtq(1.0, signed); length];
+        let scale = 1f32.max(value);
+        let scales = vec![scale; num_blocks];
+        let value_dtq = f32_to_dtq(value / scale, signed);
+        let block = vec![value_dtq; length];
         BlockScaled {
             scales,
             block,
             block_size,
             signed
         }
+    }
+
+    pub fn par_for_each(&mut self, visitor: impl Fn(&mut [u8], &mut f32, usize) + Sync) {
+        self.block.as_mut_slice().par_chunks_mut(self.block_size).zip(self.scales.par_iter_mut()).enumerate().for_each(|(i, (block_chunk, scale))| {
+            visitor(block_chunk, scale, i * self.block_size);
+        });
+    }
+
+    pub fn par_f32_for_each(&mut self, visitor: impl Fn(&mut [f32], usize) + Sync) {
+        let is_signed = self.signed;
+        self.par_for_each(|block_chunk, scale, i| {
+            let mut f32_chunk = block_chunk.iter().map(|&x| dtq_to_f32(x, is_signed) * (*scale)).collect::<Vec<f32>>();
+            visitor(f32_chunk.as_mut_slice(), 0);
+            let new_scale = f32_chunk.iter().map(|&x| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            block_chunk.copy_from_slice(&f32_chunk.iter().map(|&x| f32_to_dtq(x / new_scale, is_signed)).collect::<Vec<u8>>());
+        });
     }
 }
 
@@ -190,25 +209,46 @@ pub struct AdamState {
     pub beta1: f32,
     pub beta2: f32,
     pub epsilon: f32,
-    pub block_size: usize,
-    pub m: BlockScaled,
+    block_size: usize,
+    length: usize,
+    pub m: Option<BlockScaled>,
     pub v: BlockScaled,
     pub t: u64,
 }
 
-// impl AdamState {
-//     pub fn new(learning_rate: f32, beta1: f32, beta2: f32, epsilon: f32, block_size: usize) -> Self {
-//         let m = BlockScaled::new(block_size);
-//         let v = BlockScaled::new(block_size);
-//         let t = 0;
-//         AdamState {
-//             learning_rate,
-//             beta1,
-//             beta2,
-//             epsilon,
-//             m,
-//             v,
-//             t,
-//         }
-//     }
-// }
+impl AdamState {
+    pub fn new(learning_rate: f32, beta1: f32, beta2: f32, epsilon: f32, length: usize, block_size: usize, use_momentum: bool) -> Self {
+        let m = match use_momentum {
+            true => Some(BlockScaled::from_elem(length, block_size, 0f32, true)),
+            false => None,
+        };
+        let v = BlockScaled::from_elem(length, block_size, 1f32, false);
+        let t = 0;
+        AdamState {
+            learning_rate,
+            beta1,
+            beta2,
+            epsilon,
+            block_size,
+            length,
+            m,
+            v,
+            t,
+        }
+    }
+
+    pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16]) {
+        // update i
+        self.t += 1;
+        // update m (if present)
+        if let Some(ref mut m) = self.m {
+            m.par_f32_for_each(|m_chunk, i| {
+                
+            });
+        }
+        // update v
+        self.v.par_f32_for_each(|v_chunk, i| {
+            
+        });
+    }
+}
