@@ -179,9 +179,11 @@ impl BlockScaled {
         assert!(length % block_size == 0, "length must be a multiple of block_size");
         let num_blocks = length / block_size;
         let scale = 1f32.max(value);
-        let scales = vec![scale; num_blocks];
+        // let scales = vec![scale; num_blocks];
+        let scales = (0..num_blocks).into_par_iter().map(|_| scale).collect::<Vec<f32>>();
         let value_dtq = f32_to_dtq(value / scale, signed);
-        let block = vec![value_dtq; length];
+        // let block = vec![value_dtq; length];
+        let block = (0..length).into_par_iter().map(|_| value_dtq).collect::<Vec<u8>>();
         BlockScaled {
             scales,
             block,
@@ -255,7 +257,6 @@ impl AdamState {
     pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16]) {
         // update i
         self.t += 1;
-        println!("update m");
         // update m (if present)
         if let Some(ref mut m) = self.m {
             m.par_array_for_each(|m_chunk, i| {
@@ -265,14 +266,12 @@ impl AdamState {
                 *m_chunk += &grad_array;
             });
         }
-        println!("update v");
         // update v
         self.v.par_array_for_each(|v_chunk, i| {
             v_chunk.mapv_inplace(|x| x * self.beta2);
             let grad_array = ArrayView1::from_shape((self.block_size,), &gradients[i..i+self.block_size]).unwrap().mapv(|x| x.to_f32().powi(2) * (1.0 - self.beta2));
             *v_chunk += &grad_array;
         });
-        println!("update parameters");
         // update parameters
         if let Some(ref m) = self.m {
             parameters.par_iter_mut().zip(m.par_iter()).zip(self.v.par_iter()).for_each(|((parameter, m), v)| {
@@ -296,7 +295,7 @@ impl AdamState {
 fn test_adam_momentum_state() {
     let length = 1 << 10;
     let mut state = AdamState::new(1e-2, 0.9, 0.9, 1e-10, length, 64);
-    let mut parameters = vec![bf16::ZERO; 1 << 10];
+    let mut parameters = vec![bf16::ZERO; length];
     for i in 0..100 {
         let gradients = generate_weights(length, 0.1);
         state.update(&gradients, &mut parameters);

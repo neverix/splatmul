@@ -1,10 +1,12 @@
 #![feature(portable_simd)]
 #![feature(new_uninit)]
 use half::bf16;
+use indicatif::ProgressIterator;
 use rayon::prelude::*;
+use splatmul::adam::AdamState;
 use splatmul::benchmarking::{benchmark, SparseMatmulContext};
 use splatmul::backward::{backward, BackwardPassContext};
-use splatmul::time_fn;
+use splatmul::{make_progress, time_fn};
 use splatmul::generate::{generate_data, generate_indices, generate_orthogonal, generate_weights};
 use ndarray::{Array, ArrayView, Dim};
 
@@ -36,8 +38,17 @@ fn main() {
     // };
     let mut encoder_weights = generate_weights(N * M, scale);
     println!("First encoder weights: {:?}", &encoder_weights[0..32]);
-    let mut decoder_weights = encoder_weights.clone();
+    let mut decoder_weights = encoder_weights.par_iter().map(|&x| x).collect::<Vec<bf16>>();
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
+
+    println!("Adam initialization...");
+    let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16));
+    println!("Adam update...");
+    time_fn!({
+        let grads = generate_weights(N * M, scale);
+        adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
+        adam.update(grads.as_slice(), encoder_weights.as_mut_slice());
+    });
 
     let input_data = generate_data(N * M);
     println!("First input data: {:?}", &input_data[0..32]);
