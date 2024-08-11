@@ -5,6 +5,7 @@ pub mod benchmarking;
 pub mod conversions;
 pub mod generate;
 pub mod types;
+pub mod backward;
 
 use attempts::unsafe_alloc_parallel_sparse_matmul;
 use benchmarking::SparseMatmulContext;

@@ -12,20 +12,6 @@ pub struct SparseMatmulContext<'a> {
     pub decoder_weights: &'a [bf16],
 }
 
-pub struct BackwardPassContext<'a> {
-    pub n: usize,
-    pub k: usize,
-    pub l: usize,
-    pub m: usize,
-    pub input_embeds: &'a [i8],
-    pub target_embeds: &'a [i8],
-    pub sparse_weights: &'a [bf16],
-    pub sparse_indices: &'a [u32],
-    pub output_embeds: &'a [i8],
-    pub decoder_weights: &'a mut [bf16],
-    pub encoder_weights: &'a mut [bf16],
-}
-
 impl SparseMatmulContext<'_> {
     pub fn from_vec<'a>(
         n: usize,
@@ -59,4 +45,15 @@ pub fn benchmark<T>(
     let elapsed = start.elapsed().unwrap();
     println!("Elapsed time for {}: {:?}", fun_name, elapsed);
     result
+}
+
+#[macro_export]
+macro_rules! time_fn {
+    ($e: expr) => {{
+        let start = std::time::Instant::now();
+        let result = $e;
+        let duration = start.elapsed();
+        println!("Time: {:?}", duration);
+        result
+    }}
 }
