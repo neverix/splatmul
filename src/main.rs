@@ -1,12 +1,10 @@
 #![feature(portable_simd)]
 #![feature(new_uninit)]
-use half::bf16;
-use indicatif::{style, ParallelProgressIterator, ProgressIterator};
 use rayon::prelude::*;
 use splatmul::benchmarking::{benchmark, SparseMatmulContext};
 use splatmul::backward::{backward, BackwardPassContext};
 use splatmul::time_fn;
-use splatmul::generate::{generate_data, generate_indices, generate_weights};
+use splatmul::generate::{generate_data, generate_indices, generate_orthogonal, generate_weights};
 use ndarray::{Array, ArrayView, Dim};
 
 use splatmul::attempts::{alloc_lower_bound, alloc_uninit_sync, limit_parallel_sparse_matmul};
@@ -31,10 +29,10 @@ fn main() {
     println!("First indices: {:?}", &sparse_indices[0..32]);
 
     let scale = 1.0 / (M as f32).sqrt();
-    let mut decoder_weights = generate_weights(L * M, scale);
-    println!("First decoder weights: {:?}", &decoder_weights[0..32]);
-    let mut encoder_weights = generate_weights(L * M, scale);
+    let mut encoder_weights = generate_orthogonal(N, M, scale);
     println!("First encoder weights: {:?}", &encoder_weights[0..32]);
+    let mut decoder_weights = encoder_weights.clone();
+    println!("First decoder weights: {:?}", &decoder_weights[0..32]);
 
     let input_data = generate_data(N * M);
     println!("First input data: {:?}", &input_data[0..32]);

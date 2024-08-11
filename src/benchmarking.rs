@@ -57,3 +57,10 @@ macro_rules! time_fn {
         result
     }}
 }
+
+#[macro_export]
+macro_rules! make_progress {
+    () => {
+        style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise} {eta_precise}]").unwrap()
+    }
+}

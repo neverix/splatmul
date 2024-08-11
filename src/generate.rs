@@ -1,7 +1,11 @@
 use half::bf16;
+use indicatif::{style, ProgressIterator};
+use ndarray::{Array1, ArrayView1};
 use rand::Rng;
 use rand_distr::Uniform;
 use rayon::prelude::*;
+
+use crate::make_progress;
 
 pub fn generate_weights(size: usize, scale: f32) -> Vec<bf16> {
     let distribution = Uniform::new(-scale, scale);
@@ -35,6 +39,60 @@ pub fn generate_data(size: usize) -> Vec<i8> {
             rng.sample(distribution)
         })
         .collect()
+}
+
+pub fn generate_orthogonal(n: usize, m: usize, scale: f32) -> Vec<bf16> {
+    // random, non-orthogonal weights
+    let mut weights = generate_weights(n * m, scale);
+    let mut norms = Vec::<f64>::with_capacity(n);
+    let owned_array_index = |i, weights: &Vec<bf16>| ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m]).unwrap().map(|x| x.to_f64());
+    let arr_0 = owned_array_index(0, &weights);
+    norms.push(arr_0.dot(&arr_0));
+    for i in (1..n).progress_with_style(make_progress!()) {
+        let mut arr_current = owned_array_index(i, &weights);
+        let og_norm = arr_current.dot(&arr_current);
+        norms.push(og_norm);
+        for j in 0..i {
+            let mut arr_prev = owned_array_index(j, &weights);
+            let dot = arr_current.dot(&arr_prev) / norms[j];
+            arr_prev *= dot;
+            arr_current -= &arr_prev;
+        }
+        arr_current *= og_norm.sqrt() / arr_current.dot(&arr_current).sqrt();
+        weights[i * m..(i + 1) * m].copy_from_slice(&arr_current.mapv(|x| bf16::from_f64(x)).as_slice().unwrap());
+    }
+    weights
+}
+
+#[test]
+fn test_orthogonal_init() {
+    let n = 1 << 10;
+    let m = 1 << 10;
+    let scale = 1.0 / (m as f32).sqrt();
+    let weights = generate_orthogonal(n, m, scale);
+    assert_eq!(weights.len(), n * m);
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let arr_i = ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m]).unwrap().map(|x| x.to_f32());
+            let arr_j = ArrayView1::from_shape([m], &weights[j * m..(j + 1) * m]).unwrap().map(|x| x.to_f32());
+            let arr_i_norm = arr_i.dot(&arr_i);
+            let arr_j_norm = arr_j.dot(&arr_j);
+            let arr_ij_norm = arr_i.dot(&arr_j);
+            assert!(
+                arr_ij_norm.abs() < 0.05,
+                "i: {}, j: {}, dot: {}, i_norm: {}, j_norm: {}, i_j_sqrt: {}",
+                i,
+                j,
+                arr_ij_norm,
+                arr_i_norm,
+                arr_j_norm,
+                (arr_i_norm * arr_j_norm).abs().sqrt()
+            );
+        }
+    }
 }
 
 #[test]

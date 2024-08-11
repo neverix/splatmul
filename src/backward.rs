@@ -3,8 +3,8 @@ use std::mem::MaybeUninit;
 use half::bf16;
 use indicatif::{style, ParallelProgressIterator};
 use rayon::prelude::*;
-use crate::time_fn;
-use ndarray::{s, Array, ArrayView, Dim, Slice};
+use crate::{make_progress, time_fn};
+use ndarray::{s, Array, ArrayView, Dim};
 
 use crate::types::{DecoderGradientType, WeightGradientType};
 
@@ -43,7 +43,7 @@ fn compute_grads(ctx: &BackwardPassContext, output_grads: &OutputGradientType) -
     let mut v = Vec::<f32>::with_capacity(ctx.n * ctx.k);
     v.spare_capacity_mut()
         .par_chunks_mut(ctx.k)
-        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
+        .progress_with_style(make_progress!())
         .enumerate()
         .for_each(|(n, outputs)| {
             let k_grads: Vec<MaybeUninit<f32>> = (0..ctx.k).into_iter().map(|k| {
@@ -69,7 +69,7 @@ fn weight_grads_fast<const M_CHUNK: usize>(ctx: &BackwardPassContext, out_grads:
     output_grads
         .par_chunks_mut(M_CHUNK * ctx.l)
         .enumerate()
-        .progress_with_style(style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise}]").unwrap())
+        .progress_with_style(make_progress!())
         .for_each(|(sl_start, outputs)| {
             let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
             let is_decoder = m_start >= ctx.m;
