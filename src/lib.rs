@@ -2,17 +2,16 @@
 #![feature(const_trait_impl)]
 #![feature(const_fn_floating_point_arithmetic)]
 #![feature(const_mut_refs)]
-
 #![feature(portable_simd)]
 #![feature(new_uninit)]
 
+pub mod adam;
 pub mod attempts;
+pub mod backward;
 pub mod benchmarking;
 pub mod conversions;
 pub mod generate;
 pub mod types;
-pub mod backward;
-pub mod adam;
 
 use attempts::classic::beautiful_parallel_sparse_matmul;
 use backward::{backward, BackwardPassContext};
@@ -21,6 +20,7 @@ use half::bf16;
 use numpy::ndarray::Array2;
 use numpy::{PyArrayDyn, PyReadonlyArrayDyn};
 use pyo3::prelude::*;
+use pyo3::types::PyInt;
 use pyo3::types::PyTuple;
 
 fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
@@ -29,7 +29,10 @@ fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
 
 macro_rules! assert_std_layout {
     ($x: ident) => {
-        assert!($x.as_array().is_standard_layout(), concat!(stringify!($x), " is not standard layout"));
+        assert!(
+            $x.as_array().is_standard_layout(),
+            concat!(stringify!($x), " is not standard layout")
+        );
     };
 }
 
@@ -135,12 +138,60 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
             };
             backward(&ctx)
         });
-        let encoder_grad_nd = Array2::from_shape_vec([l, m], encoder_grad.into_iter().map(|x| x.to_bits()).collect()).unwrap().into_dyn();
-        let decoder_grad_nd = Array2::from_shape_vec([l, m], decoder_grad.into_iter().map(|x| x.to_bits()).collect()).unwrap().into_dyn();
+        let encoder_grad_nd = Array2::from_shape_vec(
+            [l, m],
+            encoder_grad.into_iter().map(|x| x.to_bits()).collect(),
+        )
+        .unwrap()
+        .into_dyn();
+        let decoder_grad_nd = Array2::from_shape_vec(
+            [l, m],
+            decoder_grad.into_iter().map(|x| x.to_bits()).collect(),
+        )
+        .unwrap()
+        .into_dyn();
         PyTuple::new_bound(
             py,
-            vec![PyArrayDyn::from_owned_array_bound(py, encoder_grad_nd),
-                 PyArrayDyn::from_owned_array_bound(py, decoder_grad_nd)],
+            vec![
+                PyArrayDyn::from_owned_array_bound(py, encoder_grad_nd),
+                PyArrayDyn::from_owned_array_bound(py, decoder_grad_nd),
+            ],
+        )
+    }
+
+    #[pyfn(m)]
+    #[pyo3(name = "matmat")]
+    fn matmat_py<'py>(
+        py: Python<'py>,
+        n: Bound<'py, PyInt>,
+        m: Bound<'py, PyInt>,
+    ) -> Bound<'py, PyTuple> {
+        let n = n.extract::<usize>().unwrap();
+        let m = m.extract::<usize>().unwrap();
+        let encoder_weights = generate::generate_weights(n * m, 1.0 / (m as f32).sqrt());
+        let decoder_weights = encoder_weights.clone();
+        PyTuple::new_bound(
+            py,
+            vec![
+                PyArrayDyn::from_owned_array_bound(
+                    py,
+                    Array2::from_shape_vec(
+                        [n, m],
+                        encoder_weights.into_iter().map(|x| x.to_bits()).collect(),
+                    )
+                    .unwrap()
+                    .into_dyn(),
+                ),
+                PyArrayDyn::from_owned_array_bound(
+                    py,
+                    Array2::from_shape_vec(
+                        [n, m],
+                        decoder_weights.into_iter().map(|x| x.to_bits()).collect(),
+                    )
+                    .unwrap()
+                    .into_dyn(),
+                ),
+            ],
         )
     }
 

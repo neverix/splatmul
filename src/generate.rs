@@ -5,7 +5,6 @@ use rand::Rng;
 use rand_distr::Uniform;
 use rayon::prelude::*;
 
-
 use crate::make_progress;
 
 pub fn generate_weights(size: usize, scale: f32) -> Vec<bf16> {
@@ -46,7 +45,11 @@ pub fn generate_orthogonal(n: usize, m: usize, scale: f32) -> Vec<bf16> {
     // random, non-orthogonal weights
     let mut weights = generate_weights(n * m, scale);
     let mut norms = Vec::<f32>::with_capacity(n);
-    let owned_array_index = |i, weights: &Vec<bf16>| ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m]).unwrap().map(|x| x.to_f32());
+    let owned_array_index = |i, weights: &Vec<bf16>| {
+        ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m])
+            .unwrap()
+            .map(|x| x.to_f32())
+    };
     let arr_0 = owned_array_index(0, &weights);
     norms.push(arr_0.dot(&arr_0));
     for i in make_progress!(1..n) {
@@ -54,15 +57,19 @@ pub fn generate_orthogonal(n: usize, m: usize, scale: f32) -> Vec<bf16> {
         let og_norm = arr_current.dot(&arr_current);
         norms.push(og_norm);
 
-        let to_sub = (0..i).into_par_iter().map(|j| {
-            let mut arr_prev = owned_array_index(j, &weights);
-            let dot = arr_current.dot(&arr_prev) / norms[j];
-            arr_prev *= dot;
-            arr_prev
-        }).reduce(|| Array1::from_elem((m,), 0f32), |a, b| a + b);
+        let to_sub = (0..i)
+            .into_par_iter()
+            .map(|j| {
+                let mut arr_prev = owned_array_index(j, &weights);
+                let dot = arr_current.dot(&arr_prev) / norms[j];
+                arr_prev *= dot;
+                arr_prev
+            })
+            .reduce(|| Array1::from_elem((m,), 0f32), |a, b| a + b);
         arr_current -= &to_sub;
         arr_current *= og_norm.sqrt() / arr_current.dot(&arr_current).sqrt();
-        weights[i * m..(i + 1) * m].copy_from_slice(&arr_current.mapv(|x| bf16::from_f32(x)).as_slice().unwrap());
+        weights[i * m..(i + 1) * m]
+            .copy_from_slice(&arr_current.mapv(|x| bf16::from_f32(x)).as_slice().unwrap());
     }
     weights
 }
@@ -79,8 +86,12 @@ fn test_orthogonal_init() {
             if i == j {
                 continue;
             }
-            let arr_i = ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m]).unwrap().map(|x| x.to_f32());
-            let arr_j = ArrayView1::from_shape([m], &weights[j * m..(j + 1) * m]).unwrap().map(|x| x.to_f32());
+            let arr_i = ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m])
+                .unwrap()
+                .map(|x| x.to_f32());
+            let arr_j = ArrayView1::from_shape([m], &weights[j * m..(j + 1) * m])
+                .unwrap()
+                .map(|x| x.to_f32());
             let arr_i_norm = arr_i.dot(&arr_i);
             let arr_j_norm = arr_j.dot(&arr_j);
             let arr_ij_norm = arr_i.dot(&arr_j);

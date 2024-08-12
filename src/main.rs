@@ -2,14 +2,14 @@
 #![feature(new_uninit)]
 use half::bf16;
 use indicatif::ProgressIterator;
+use ndarray::{Array, ArrayView, Dim};
 use rayon::prelude::*;
 use splatmul::adam::AdamState;
 use splatmul::attempts::classic::beautiful_parallel_sparse_matmul;
-use splatmul::benchmarking::{benchmark, SparseMatmulContext};
 use splatmul::backward::{backward, BackwardPassContext};
-use splatmul::{make_progress, time_fn};
+use splatmul::benchmarking::{benchmark, SparseMatmulContext};
 use splatmul::generate::{generate_data, generate_indices, generate_orthogonal, generate_weights};
-use ndarray::{Array, ArrayView, Dim};
+use splatmul::{make_progress, time_fn};
 
 use splatmul::attempts::{alloc_lower_bound, alloc_uninit_sync, limit_parallel_sparse_matmul};
 use splatmul::attempts::{naive_parallel_sparse_matmul, ugly_parallel_sparse_matmul};
@@ -25,7 +25,6 @@ const M: usize = 1 << 14;
 // const L: usize = 1 << 12;
 // const M: usize = 1 << 14;
 
-
 fn main() {
     let sparse_weights = generate_weights(N * K, 40.0);
     println!("First weights: {:?}", &sparse_weights[0..32]);
@@ -39,7 +38,10 @@ fn main() {
     // };
     let mut encoder_weights = generate_weights(N * M, scale);
     println!("First encoder weights: {:?}", &encoder_weights[0..32]);
-    let mut decoder_weights = encoder_weights.par_iter().map(|&x| x).collect::<Vec<bf16>>();
+    let mut decoder_weights = encoder_weights
+        .par_iter()
+        .map(|&x| x)
+        .collect::<Vec<bf16>>();
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
 
     // println!("Adam initialization...");
@@ -65,13 +67,27 @@ fn main() {
             &decoder_weights,
         );
         // benchmark(ugly_parallel_sparse_matmul, ctx, "ugly_parallel_sparse_matmul");
-        benchmark(beautiful_parallel_sparse_matmul, ctx, "beautiful_parallel_sparse_matmul");
-        let forward_result = benchmark(unsafe_alloc_parallel_sparse_matmul, ctx, "unsafe_alloc_parallel_sparse_matmul");
+        benchmark(
+            beautiful_parallel_sparse_matmul,
+            ctx,
+            "beautiful_parallel_sparse_matmul",
+        );
+        let forward_result = benchmark(
+            unsafe_alloc_parallel_sparse_matmul,
+            ctx,
+            "unsafe_alloc_parallel_sparse_matmul",
+        );
         println!("First forward result embeds: {:?}", &forward_result[0..32]);
         println!("Benchmarking to int8...");
-        time_fn!(forward_result.par_iter().map(|&x| (x.to_f32() * 127.5f32).clamp(-128., 127.) as i8).collect::<Vec<i8>>())
+        time_fn!(forward_result
+            .par_iter()
+            .map(|&x| (x.to_f32() * 127.5f32).clamp(-128., 127.) as i8)
+            .collect::<Vec<i8>>())
     };
-    println!("First forward result embeds (int8): {:?}", &forward_result_i8[0..32]);
+    println!(
+        "First forward result embeds (int8): {:?}",
+        &forward_result_i8[0..32]
+    );
 
     // let backward_ctx = BackwardPassContext {
     //     n: N,

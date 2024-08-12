@@ -13,10 +13,8 @@ pub fn transmute_bf16_to_u16(bf16: &[bf16]) -> &[u16] {
 
 pub fn unsafe_alloc_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<bf16> {
     let mut v = Vec::<bf16>::with_capacity(ctx.n * ctx.m);
-    make_progress!(v.spare_capacity_mut()
-        .par_chunks_mut(ctx.m)
-        .enumerate())
-        .for_each(|(n, outputs)| {
+    make_progress!(v.spare_capacity_mut().par_chunks_mut(ctx.m).enumerate()).for_each(
+        |(n, outputs)| {
             for m_start in (0..ctx.m).step_by(64) {
                 let chunk = m_start..m_start + 64;
                 let mut simd_accum = f32x64::splat(0.0);
@@ -36,7 +34,8 @@ pub fn unsafe_alloc_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<bf16
                     transmute_u16_to_bf16_owned(array_form).map(|x| MaybeUninit::new(x));
                 outputs[chunk.clone()].copy_from_slice(&maybe_uninit_array);
             }
-        });
+        },
+    );
     unsafe { v.set_len(ctx.n * ctx.m) };
     v
 }

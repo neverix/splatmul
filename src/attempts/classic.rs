@@ -30,16 +30,16 @@ pub fn ugly_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<Array1<bf16>
 
 pub fn beautiful_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<i8> {
     let mut v = Vec::<i8>::with_capacity(ctx.n * ctx.m);
-    make_progress!(v.spare_capacity_mut()
-        .par_chunks_mut(ctx.m))
+    make_progress!(v.spare_capacity_mut().par_chunks_mut(ctx.m))
         .enumerate()
         .for_each(|(n, outputs)| {
             let mut accum = Array1::from_elem((ctx.m,), 0f32);
-            for k in 0..ctx.k { 
+            for k in 0..ctx.k {
                 let weight = ctx.sparse_weights[n * ctx.k + k].to_f32();
                 let index = ctx.sparse_indices[n * ctx.k + k];
                 let decoder_row = (&ctx.decoder_weights
-                    [index as usize * ctx.m..(index as usize + 1) * ctx.m]).to_f32_vec();
+                    [index as usize * ctx.m..(index as usize + 1) * ctx.m])
+                    .to_f32_vec();
                 accum += &(ArrayView::from_shape((ctx.m,), decoder_row.as_slice())
                     .unwrap()
                     .to_owned()

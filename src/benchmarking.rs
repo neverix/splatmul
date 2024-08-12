@@ -59,7 +59,9 @@ macro_rules! time_fn {
         result
     }};
     ($e: expr, $m: expr) => {{
-        if cfg!(debug_assertions) { println!("{}", $m); }
+        if cfg!(debug_assertions) {
+            println!("{}", $m);
+        }
         let start = std::time::Instant::now();
         let result = $e;
         if cfg!(debug_assertions) {
@@ -67,16 +69,20 @@ macro_rules! time_fn {
             println!("Time: {:?}", duration);
         }
         result
-    }}
+    }};
 }
 
 #[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! make_progress {
     ($e: expr) => {{
-        use indicatif::{style::ProgressStyle, ProgressIterator, ParallelProgressIterator};
-        $e.progress_with_style(ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise} {eta_precise}]").unwrap())
-    }}
+        use indicatif::{style::ProgressStyle, ParallelProgressIterator, ProgressIterator};
+        $e.progress_with_style(
+            ProgressStyle::default_bar()
+                .template("{wide_bar} {pos}/{len} [{elapsed_precise} {eta_precise}]")
+                .unwrap(),
+        )
+    }};
 }
 
 #[cfg(not(debug_assertions))]
@@ -84,5 +90,5 @@ macro_rules! make_progress {
 macro_rules! make_progress {
     ($e: expr) => {{
         $e
-    }}
+    }};
 }
