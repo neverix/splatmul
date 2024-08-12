@@ -50,18 +50,39 @@ pub fn benchmark<T>(
 #[macro_export]
 macro_rules! time_fn {
     ($e: expr) => {{
+        let start = std::time::SystemTime::now();
+        let result = $e;
+        if cfg!(debug_assertions) {
+            let duration = start.elapsed().unwrap();
+            println!("Time: {:?}", duration);
+        }
+        result
+    }};
+    ($e: expr, $m: expr) => {{
+        if cfg!(debug_assertions) { println!("{}", $m); }
         let start = std::time::Instant::now();
         let result = $e;
-        let duration = start.elapsed();
-        println!("Time: {:?}", duration);
+        if cfg!(debug_assertions) {
+            let duration = start.elapsed();
+            println!("Time: {:?}", duration);
+        }
         result
     }}
 }
 
+#[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! make_progress {
-    () => {{
-        use indicatif::style;
-        style::ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise} {eta_precise}]").unwrap()
+    ($e: expr) => {{
+        use indicatif::{style::ProgressStyle, ProgressIterator, ParallelProgressIterator};
+        $e.progress_with_style(ProgressStyle::default_bar().template("{wide_bar} {pos}/{len} [{elapsed_precise} {eta_precise}]").unwrap())
+    }}
+}
+
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! make_progress {
+    ($e: expr) => {{
+        $e
     }}
 }

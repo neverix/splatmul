@@ -223,7 +223,7 @@ impl<const SIGNED: bool> BlockScaled<SIGNED> {
 
     #[inline]
     pub fn par_for_each(&mut self, visitor: impl Fn(&mut [u8], &mut [f32], usize) + Sync) {
-        self.block.as_mut_slice().par_chunks_mut(self.block_size * CHUNK_CHUNK).zip(self.scales.par_chunks_mut(CHUNK_CHUNK)).enumerate().into_par_iter().progress_with_style(make_progress!()).for_each(|(i, (block_chunk, scale))| {
+        make_progress!(self.block.as_mut_slice().par_chunks_mut(self.block_size * CHUNK_CHUNK).zip(self.scales.par_chunks_mut(CHUNK_CHUNK)).enumerate().into_par_iter()).for_each(|(i, (block_chunk, scale))| {
             visitor(block_chunk, scale, i * self.block_size * CHUNK_CHUNK);
         });
     }

@@ -13,10 +13,9 @@ pub fn transmute_bf16_to_u16(bf16: &[bf16]) -> &[u16] {
 
 pub fn unsafe_alloc_parallel_sparse_matmul(ctx: SparseMatmulContext) -> Vec<bf16> {
     let mut v = Vec::<bf16>::with_capacity(ctx.n * ctx.m);
-    v.spare_capacity_mut()
+    make_progress!(v.spare_capacity_mut()
         .par_chunks_mut(ctx.m)
-        .progress_with_style(make_progress!())
-        .enumerate()
+        .enumerate())
         .for_each(|(n, outputs)| {
             for m_start in (0..ctx.m).step_by(64) {
                 let chunk = m_start..m_start + 64;

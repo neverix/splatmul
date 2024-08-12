@@ -19,8 +19,8 @@ pub struct BackwardPassContext<'a> {
     pub sparse_weights: &'a [bf16],
     pub sparse_indices: &'a [u32],
     pub output_embeds: &'a [i8],
-    pub decoder_weights: &'a mut [bf16],
-    pub encoder_weights: &'a mut [bf16],
+    pub decoder_weights: &'a [bf16],
+    pub encoder_weights: &'a [bf16],
 }
 
 type OutputGradientType = Vec<Array<bf16, Dim<[usize; 1]>>>;
@@ -41,10 +41,9 @@ fn compute_output_gradient(ctx: &BackwardPassContext) -> OutputGradientType {
 
 fn compute_grads(ctx: &BackwardPassContext, output_grads: &OutputGradientType) -> Vec<DecoderGradientType> {
     let mut v = Vec::<f32>::with_capacity(ctx.n * ctx.k);
-    v.spare_capacity_mut()
+    make_progress!(v.spare_capacity_mut()
         .par_chunks_mut(ctx.k)
-        .progress_with_style(make_progress!())
-        .enumerate()
+        .enumerate())
         .for_each(|(n, outputs)| {
             let k_grads: Vec<MaybeUninit<f32>> = (0..ctx.k).into_iter().map(|k| {
                 let index = ctx.sparse_indices[n * ctx.k + k];
@@ -66,10 +65,9 @@ fn compute_grads(ctx: &BackwardPassContext, output_grads: &OutputGradientType) -
 fn weight_grads_fast<const M_CHUNK: usize>(ctx: &BackwardPassContext, out_grads: &OutputGradientType, decoder_grads: &[DecoderGradientType]) -> (Vec<WeightGradientType>, Vec<WeightGradientType>) {
     let lm = ctx.l * ctx.m;
     let mut output_grads = (0..lm * 2).into_par_iter().map(|_| bf16::ZERO).collect::<Vec<WeightGradientType>>();
-    output_grads
+    make_progress!(output_grads
         .par_chunks_mut(M_CHUNK * ctx.l)
-        .enumerate()
-        .progress_with_style(make_progress!())
+        .enumerate())
         .for_each(|(sl_start, outputs)| {
             let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
             let is_decoder = m_start >= ctx.m;
@@ -125,14 +123,8 @@ fn weight_grads_fast<const M_CHUNK: usize>(ctx: &BackwardPassContext, out_grads:
 }
 
 pub fn backward(ctx: &BackwardPassContext) -> (Vec<WeightGradientType>, Vec<WeightGradientType>) {
-    println!("Benchmarking compute_output_gradient...");
-    let output_grads = time_fn!(compute_output_gradient(&ctx));
-    println!("Benchmarking compute_grads...");
-    let decoder_grads = time_fn!(compute_grads(&ctx, &output_grads));
-    println!("First decoder grads: {:?}", &decoder_grads[0..32]);
-    println!("Benchmarking weight_grads_fast...");
-    let (encoder_grads, decoder_grads) = time_fn!(weight_grads_fast::<{1 << 7}>(&ctx, &output_grads, &decoder_grads));
-    println!("First encoder weight grads: {:?}", &encoder_grads[0..32]);
-    println!("First decoder weight grads: {:?}", &decoder_grads[0..32]);
+    let output_grads = time_fn!(compute_output_gradient(&ctx), "Benchmarking compute_output_gradient...");
+    let decoder_grads = time_fn!(compute_grads(&ctx, &output_grads), "Benchmarking compute_grads...");
+    let (encoder_grads, decoder_grads) = time_fn!(weight_grads_fast::<{1 << 7}>(&ctx, &output_grads, &decoder_grads), "Benchmarking weight_grads_fast...");
     (encoder_grads, decoder_grads)
 }

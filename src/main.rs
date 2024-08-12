@@ -4,6 +4,7 @@ use half::bf16;
 use indicatif::ProgressIterator;
 use rayon::prelude::*;
 use splatmul::adam::AdamState;
+use splatmul::attempts::classic::beautiful_parallel_sparse_matmul;
 use splatmul::benchmarking::{benchmark, SparseMatmulContext};
 use splatmul::backward::{backward, BackwardPassContext};
 use splatmul::{make_progress, time_fn};
@@ -41,14 +42,14 @@ fn main() {
     let mut decoder_weights = encoder_weights.par_iter().map(|&x| x).collect::<Vec<bf16>>();
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
 
-    println!("Adam initialization...");
-    let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16));
-    println!("Adam update...");
-    time_fn!({
-        let grads = generate_weights(N * M, scale);
-        adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
-    });
-    return;
+    // println!("Adam initialization...");
+    // let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16));
+    // println!("Adam update...");
+    // time_fn!({
+    //     let grads = generate_weights(N * M, scale);
+    //     adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
+    // });
+    // return;
 
     let input_data = generate_data(N * M);
     println!("First input data: {:?}", &input_data[0..32]);
@@ -63,6 +64,8 @@ fn main() {
             &sparse_indices,
             &decoder_weights,
         );
+        // benchmark(ugly_parallel_sparse_matmul, ctx, "ugly_parallel_sparse_matmul");
+        benchmark(beautiful_parallel_sparse_matmul, ctx, "beautiful_parallel_sparse_matmul");
         let forward_result = benchmark(unsafe_alloc_parallel_sparse_matmul, ctx, "unsafe_alloc_parallel_sparse_matmul");
         println!("First forward result embeds: {:?}", &forward_result[0..32]);
         println!("Benchmarking to int8...");
@@ -70,18 +73,18 @@ fn main() {
     };
     println!("First forward result embeds (int8): {:?}", &forward_result_i8[0..32]);
 
-    let backward_ctx = BackwardPassContext {
-        n: N,
-        k: K,
-        l: L,
-        m: M,
-        input_embeds: &input_data,
-        target_embeds: &input_data,
-        output_embeds: &forward_result_i8,
-        sparse_indices: &sparse_indices,
-        sparse_weights: &sparse_weights,
-        decoder_weights: &mut decoder_weights,
-        encoder_weights: &mut encoder_weights,
-    };
-    backward(&backward_ctx);
+    // let backward_ctx = BackwardPassContext {
+    //     n: N,
+    //     k: K,
+    //     l: L,
+    //     m: M,
+    //     input_embeds: &input_data,
+    //     target_embeds: &input_data,
+    //     output_embeds: &forward_result_i8,
+    //     sparse_indices: &sparse_indices,
+    //     sparse_weights: &sparse_weights,
+    //     decoder_weights: &mut decoder_weights,
+    //     encoder_weights: &mut encoder_weights,
+    // };
+    // backward(&backward_ctx);
 }

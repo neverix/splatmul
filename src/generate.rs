@@ -49,7 +49,7 @@ pub fn generate_orthogonal(n: usize, m: usize, scale: f32) -> Vec<bf16> {
     let owned_array_index = |i, weights: &Vec<bf16>| ArrayView1::from_shape([m], &weights[i * m..(i + 1) * m]).unwrap().map(|x| x.to_f32());
     let arr_0 = owned_array_index(0, &weights);
     norms.push(arr_0.dot(&arr_0));
-    for i in (1..n).progress_with_style(make_progress!()) {
+    for i in make_progress!(1..n) {
         let mut arr_current = owned_array_index(i, &weights);
         let og_norm = arr_current.dot(&arr_current);
         norms.push(og_norm);
