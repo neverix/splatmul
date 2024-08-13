@@ -13,14 +13,16 @@ pub mod conversions;
 pub mod generate;
 pub mod types;
 
+use adam::AdamState;
 use attempts::classic::beautiful_parallel_sparse_matmul;
 use backward::{backward, BackwardPassContext};
 use benchmarking::SparseMatmulContext;
 use half::bf16;
 use numpy::ndarray::Array2;
-use numpy::{PyArrayDyn, PyReadonlyArrayDyn};
+use numpy::{PyArrayDyn, PyReadonlyArrayDyn, PyReadwriteArrayDyn};
 use pyo3::prelude::*;
 use pyo3::types::PyInt;
+use pyo3::types::PyFloat;
 use pyo3::types::PyTuple;
 
 fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
@@ -163,12 +165,12 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     #[pyo3(name = "matmat")]
     fn matmat_py<'py>(
         py: Python<'py>,
-        n: Bound<'py, PyInt>,
+        l: Bound<'py, PyInt>,
         m: Bound<'py, PyInt>,
     ) -> Bound<'py, PyTuple> {
-        let n = n.extract::<usize>().unwrap();
+        let l = l.extract::<usize>().unwrap();
         let m = m.extract::<usize>().unwrap();
-        let encoder_weights = generate::generate_weights(n * m, 1.0 / (m as f32).sqrt());
+        let encoder_weights = generate::generate_weights(l * m, 1.0 / (m as f32).sqrt());
         let decoder_weights = encoder_weights.clone();
         PyTuple::new_bound(
             py,
@@ -176,7 +178,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 PyArrayDyn::from_owned_array_bound(
                     py,
                     Array2::from_shape_vec(
-                        [n, m],
+                        [l, m],
                         encoder_weights.into_iter().map(|x| x.to_bits()).collect(),
                     )
                     .unwrap()
@@ -185,7 +187,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 PyArrayDyn::from_owned_array_bound(
                     py,
                     Array2::from_shape_vec(
-                        [n, m],
+                        [l, m],
                         decoder_weights.into_iter().map(|x| x.to_bits()).collect(),
                     )
                     .unwrap()
@@ -193,6 +195,57 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 ),
             ],
         )
+    }
+
+    #[pyfn(m)]
+    #[pyo3(name = "splatsplat")]
+    fn splatsplat_py<'py>(
+        py: Python<'py>,
+        l: Bound<'py, PyInt>,
+        m: Bound<'py, PyInt>,
+        lr: Bound<'py, PyFloat>,
+        b1: Bound<'py, PyFloat>,
+        b2: Bound<'py, PyFloat>,
+        eps: Bound<'py, PyFloat>,
+        block_size: Bound<'py, PyInt>,
+    ) -> PyResult<Bound<'py, AdamState>> {
+        let l = l.extract::<usize>().unwrap();
+        let m = m.extract::<usize>().unwrap();
+        let lr = lr.extract::<f32>().unwrap();
+        let b1 = b1.extract::<f32>().unwrap();
+        let b2 = b2.extract::<f32>().unwrap();
+        let eps = eps.extract::<f32>().unwrap();
+        let block_size = block_size.extract::<usize>().unwrap();
+        Bound::new(py, AdamState::new(lr, b1, b2, eps, l * m, block_size))
+    }
+
+    #[pyfn(m)]
+    #[pyo3(name = "splatmat")]
+    fn splatmat_py<'py>(
+        py: Python<'py>,
+        adam: Bound<'py, AdamState>,
+        grads: PyReadonlyArrayDyn<'py, u16>,
+        weights: PyReadwriteArrayDyn<'py, u16>,
+    ) -> PyResult<()> {
+        assert_std_layout!(grads);
+        assert_std_layout!(weights);
+        let grads_slice = grads.as_slice().unwrap();
+        let decoder_weights_slice = weights.as_slice().unwrap();
+        Python::with_gil(|_| {
+            adam.as_borrowed().borrow_mut().update(
+                grads_slice
+                    .iter()
+                    .map(|&x| bf16::from_bits(x))
+                    .collect::<Vec<bf16>>()
+                    .as_slice(),
+                decoder_weights_slice
+                    .iter()
+                    .map(|&x| bf16::from_bits(x))
+                    .collect::<Vec<bf16>>()
+                    .as_mut_slice(),
+            )
+        });
+        Ok(())
     }
 
     Ok(())
