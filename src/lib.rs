@@ -230,16 +230,18 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     ) -> PyResult<()> {
         assert_std_layout!(grads);
         assert_std_layout!(weights);
-        let grads_slice = grads.as_slice().unwrap();
-        let decoder_weights_slice = weights.as_slice_mut().unwrap();
-        let decoder_weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(decoder_weights_slice) };
-        adam.borrow_mut().update(
-            grads_slice
+        let grads_vec_bf16 = grads.as_slice().unwrap()
                 .iter()
                 .map(|&x| bf16::from_bits(x))
-                .collect::<Vec<bf16>>()
-                .as_slice(),
-            decoder_weights_slice_bf16,
+                .collect::<Vec<bf16>>();
+        let grads_slice_bf16 = grads_vec_bf16.as_slice();
+        println!("Max grads: {:?}", grads_slice_bf16.iter().map(|x| x.to_f32()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
+        panic!();
+        let weights_slice = weights.as_slice_mut().unwrap();
+        let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
+        adam.borrow_mut().update(
+            grads_slice_bf16,
+            weights_slice_bf16,
         );
         Ok(())
     }

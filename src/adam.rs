@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     cmp::min,
     simd::{
@@ -272,7 +273,7 @@ pub struct BlockScaled<const SIGNED: bool> {
 }
 
 const CHUNK_CHUNK: usize = 64;
-const ADAM_FLOOR: f32 = 1e-8;
+const ADAM_FLOOR: f32 = 1e-3;
 
 impl<const SIGNED: bool> BlockScaled<SIGNED> {
     pub fn from_elem(length: usize, block_size: usize, value: f32) -> Self {
@@ -425,6 +426,9 @@ impl AdamState {
             (&gradients[i..i + self.block_size]).convert_to_f32_slice(dst.as_mut_slice());
             let mut grad_array = Array1::from_shape_vec((self.block_size,), dst).unwrap();
             grad_array *= &grad_array.clone();
+            if !grad_array.iter().all(|&x| x.is_finite()) {
+                panic!("grad_array contains non-finite values: {:?}", grad_array);
+            }
             grad_array *= 1.0 - self.beta2;
             *v_chunk += &grad_array;
         });
