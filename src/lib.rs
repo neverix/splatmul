@@ -24,6 +24,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyInt;
 use pyo3::types::PyFloat;
 use pyo3::types::PyTuple;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
     unsafe { std::mem::transmute::<&[u16], &[bf16]>(u16) }
@@ -171,7 +172,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         let l = l.extract::<usize>().unwrap();
         let m = m.extract::<usize>().unwrap();
         let encoder_weights = generate::generate_weights(l * m, 1.0 / (m as f32).sqrt());
-        let decoder_weights = encoder_weights.clone();
+        let decoder_weights = encoder_weights.par_iter().map(|&x| x).collect::<Vec<bf16>>();
         PyTuple::new_bound(
             py,
             vec![
@@ -225,28 +226,22 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         py: Python<'py>,
         adam: Bound<'py, AdamState>,
         grads: PyReadonlyArrayDyn<'py, u16>,
-        weights: PyReadwriteArrayDyn<'py, u16>,
+        mut weights: PyReadwriteArrayDyn<'py, u16>,
     ) -> PyResult<()> {
         assert_std_layout!(grads);
         assert_std_layout!(weights);
         let grads_slice = grads.as_slice().unwrap();
-        let decoder_weights_slice = weights.as_slice().unwrap();
-        Python::with_gil(|_| {
-            adam.as_borrowed().borrow_mut().update(
-                grads_slice
-                    .iter()
-                    .map(|&x| bf16::from_bits(x))
-                    .collect::<Vec<bf16>>()
-                    .as_slice(),
-                decoder_weights_slice
-                    .iter()
-                    .map(|&x| bf16::from_bits(x))
-                    .collect::<Vec<bf16>>()
-                    .as_mut_slice(),
-            )
-        });
+        let decoder_weights_slice = weights.as_slice_mut().unwrap();
+        let decoder_weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(decoder_weights_slice) };
+        adam.borrow_mut().update(
+            grads_slice
+                .iter()
+                .map(|&x| bf16::from_bits(x))
+                .collect::<Vec<bf16>>()
+                .as_slice(),
+            decoder_weights_slice_bf16,
+        );
         Ok(())
     }
-
     Ok(())
 }
