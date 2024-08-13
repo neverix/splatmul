@@ -236,7 +236,6 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 .collect::<Vec<bf16>>();
         let grads_slice_bf16 = grads_vec_bf16.as_slice();
         println!("Max grads: {:?}", grads_slice_bf16.iter().map(|x| x.to_f32()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-        panic!();
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
         adam.borrow_mut().update(
