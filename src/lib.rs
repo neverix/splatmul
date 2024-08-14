@@ -32,10 +32,10 @@ fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
 
 macro_rules! assert_std_layout {
     ($x: ident) => {
-        assert!(
-            $x.as_array().is_standard_layout(),
-            concat!(stringify!($x), " is not standard layout")
-        );
+        if !$x.as_array().is_standard_layout() {
+            eprintln!(concat!(stringify!($x), " is not standard layout"));
+            panic!("splatmul layout assertion failed");
+        };
     };
 }
 
@@ -49,18 +49,9 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         sparse_indices: PyReadonlyArrayDyn<'py, u32>,
         decoder_weights: PyReadonlyArrayDyn<'py, u16>,
     ) -> Bound<'py, PyArrayDyn<i8>> {
-        assert!(
-            sparse_weights.as_array().is_standard_layout(),
-            "sparse_weights is not standard layout"
-        );
-        assert!(
-            sparse_indices.as_array().is_standard_layout(),
-            "sparse_indices is not standard layout"
-        );
-        assert!(
-            decoder_weights.as_array().is_standard_layout(),
-            "decoder_weights is not standard layout"
-        );
+        assert_std_layout!(sparse_weights);
+        assert_std_layout!(sparse_indices);
+        assert_std_layout!(decoder_weights);
         assert_eq!(
             sparse_weights.as_array().shape(),
             sparse_indices.as_array().shape(),
@@ -223,24 +214,24 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     #[pyfn(m)]
     #[pyo3(name = "splatmat")]
     fn splatmat_py<'py>(
-        py: Python<'py>,
+        _py: Python<'py>,
         adam: Bound<'py, AdamState>,
         grads: PyReadonlyArrayDyn<'py, u16>,
         mut weights: PyReadwriteArrayDyn<'py, u16>,
     ) -> PyResult<()> {
+        println!("asserting layouts");
         assert_std_layout!(grads);
         assert_std_layout!(weights);
-        let grads_vec_bf16 = grads.as_slice().unwrap()
-                .iter()
-                .map(|&x| bf16::from_bits(x))
-                .collect::<Vec<bf16>>();
-        let grads_slice_bf16 = grads_vec_bf16.as_slice();
+        println!("into slice");
+        let grads_slice_bf16 = unsafe { std::mem::transmute::<&[u16], &[bf16]>(grads.as_slice().unwrap()) };
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
+        println!("updating adam");
         adam.borrow_mut().update(
             grads_slice_bf16,
             weights_slice_bf16,
         );
+        println!("all done");
         Ok(())
     }
     Ok(())

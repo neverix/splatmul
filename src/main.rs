@@ -44,14 +44,12 @@ fn main() {
         .collect::<Vec<bf16>>();
     println!("First decoder weights: {:?}", &decoder_weights[0..32]);
 
-    // println!("Adam initialization...");
-    // let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16));
-    // println!("Adam update...");
-    // time_fn!({
-    //     let grads = generate_weights(N * M, scale);
-    //     adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
-    // });
-    // return;
+    let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16), "Adam initialization...");
+    time_fn!({
+        let grads = generate_weights(N * M, scale);
+        adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
+    }, "Adam update...");
+    return;
 
     let input_data = generate_data(N * M);
     println!("First input data: {:?}", &input_data[0..32]);
