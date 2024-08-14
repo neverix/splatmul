@@ -219,19 +219,15 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         grads: PyReadonlyArrayDyn<'py, u16>,
         mut weights: PyReadwriteArrayDyn<'py, u16>,
     ) -> PyResult<()> {
-        println!("asserting layouts");
         assert_std_layout!(grads);
         assert_std_layout!(weights);
-        println!("into slice");
         let grads_slice_bf16 = unsafe { std::mem::transmute::<&[u16], &[bf16]>(grads.as_slice().unwrap()) };
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
-        println!("updating adam");
         adam.borrow_mut().update(
             grads_slice_bf16,
             weights_slice_bf16,
         );
-        println!("all done");
         Ok(())
     }
     Ok(())
