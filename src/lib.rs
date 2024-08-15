@@ -116,7 +116,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         let input_embeds_slice = input_embeds.as_slice().unwrap();
         let output_embeds_slice = output_embeds.as_slice().unwrap();
         let target_embeds_slice = target_embeds.as_slice().unwrap();
-        let (encoder_grad, decoder_grad) = Python::allow_threads(py, move || {
+        let (encoder_grad_nd, decoder_grad_nd) = Python::allow_threads(py, move || {
             let ctx = BackwardPassContext {
                 n: n as usize,
                 k: k as usize,
@@ -130,20 +130,21 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 sparse_weights: transmute_u16_to_bf16(sparse_weights_slice),
                 sparse_indices: sparse_indices_slice,
             };
-            backward(&ctx)
+            let (encoder_grad, decoder_grad) = backward(&ctx);
+            let encoder_grad_nd = Array2::from_shape_vec(
+                [l, m],
+                encoder_grad.into_iter().map(|x| x.to_bits()).collect(),
+            )
+            .unwrap()
+            .into_dyn();
+            let decoder_grad_nd = Array2::from_shape_vec(
+                [l, m],
+                decoder_grad.into_iter().map(|x| x.to_bits()).collect(),
+            )
+            .unwrap()
+            .into_dyn();
+            (encoder_grad_nd, decoder_grad_nd)
         });
-        let encoder_grad_nd = Array2::from_shape_vec(
-            [l, m],
-            encoder_grad.into_iter().map(|x| x.to_bits()).collect(),
-        )
-        .unwrap()
-        .into_dyn();
-        let decoder_grad_nd = Array2::from_shape_vec(
-            [l, m],
-            decoder_grad.into_iter().map(|x| x.to_bits()).collect(),
-        )
-        .unwrap()
-        .into_dyn();
         PyTuple::new_bound(
             py,
             vec![

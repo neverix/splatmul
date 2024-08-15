@@ -1,9 +1,9 @@
 use std::mem::MaybeUninit;
 
 use crate::{make_progress, time_fn};
-use half::bf16;
+use half::prelude::*;
 use indicatif::{style, ParallelProgressIterator};
-use ndarray::{s, Array, ArrayView, Dim};
+use ndarray::{s, Array, Array1, ArrayView, Dim};
 use rayon::prelude::*;
 
 use crate::types::{DecoderGradientType, WeightGradientType};
@@ -22,7 +22,7 @@ pub struct BackwardPassContext<'a> {
     pub encoder_weights: &'a [bf16],
 }
 
-type OutputGradientType = Vec<Array<bf16, Dim<[usize; 1]>>>;
+type OutputGradientType = Vec<Vec<bf16>>;
 
 fn compute_output_gradient(ctx: &BackwardPassContext) -> OutputGradientType {
     (0..ctx.n)
@@ -36,7 +36,7 @@ fn compute_output_gradient(ctx: &BackwardPassContext) -> OutputGradientType {
 
             let target_f32 = target_embed_row_nd.mapv(|x| (x as f32) / 127.5);
             let output_f32 = output_embed_row_nd.mapv(|x| (x as f32) / 127.5);
-            (target_f32 - output_f32).mapv(bf16::from_f32)
+            Vec::from_f32_slice((target_f32 - output_f32).as_slice().unwrap())
         })
         .collect()
 }
@@ -57,7 +57,7 @@ fn compute_grads(
 
                     let decoder_row_nd = ArrayView::from_shape((ctx.m,), decoder_row).unwrap();
                     let decoder_row_f32 = decoder_row_nd.mapv(|x| x.to_f32());
-                    let output_gradient = output_grads[n].mapv(|x| x.to_f32());
+                    let output_gradient = Array1::from_shape_vec((ctx.m,), output_grads[n].as_slice().to_f32_vec()).unwrap();
 
                     let gradient = output_gradient.dot(&decoder_row_f32);
                     MaybeUninit::new(gradient)
@@ -95,8 +95,8 @@ fn weight_grads_fast<const M_CHUNK: usize>(
                         big_elem = Box::new(Some(if is_decoder {
                             let grad_row = &out_grads[n];
                             let grad_chunk =
-                                grad_row.slice(s![real_m_start..real_m_start + M_CHUNK]);
-                            grad_chunk.map(|&x| x.to_f32())
+                                &grad_row[real_m_start..real_m_start + M_CHUNK];
+                            Array1::from_shape_vec((M_CHUNK,), grad_chunk.to_f32_vec()).unwrap()
                         } else {
                             let input_embeds_i8 = &ctx.input_embeds
                                 [n * ctx.m + real_m_start..n * ctx.m + real_m_start + M_CHUNK];

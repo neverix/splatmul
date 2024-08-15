@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 opt-level = 3
 lto = true
 panic = "abort"
-debug-assertions = true
+# debug-assertions = true
 
 [profile.release.package."*"]
 opt-level = 3
