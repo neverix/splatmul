@@ -414,6 +414,7 @@ impl AdamState {
     pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16]) {
         // update i
         self.t += 1;
+        print!("update m");
         // update m (if present)
         if let Some(ref mut m) = self.m {
             m.par_array_for_each(|m_chunk, i| {
@@ -425,6 +426,7 @@ impl AdamState {
                 *m_chunk += &grad_array;
             });
         }
+        println!("update v");
         // update v
         self.v.par_array_for_each(|v_chunk, i| {
             *v_chunk *= self.beta2;
@@ -438,6 +440,7 @@ impl AdamState {
             grad_array *= 1.0 - self.beta2;
             *v_chunk += &grad_array;
         });
+        println!("update parameters");
         // update parameters
         if let Some(ref m) = self.m {
             parameters

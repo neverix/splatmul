@@ -1,5 +1,4 @@
 use half::bf16;
-use indicatif::{style, ProgressIterator};
 use ndarray::{Array1, ArrayView1};
 use rand::Rng;
 use rand_distr::Uniform;

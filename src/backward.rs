@@ -2,9 +2,10 @@ use std::mem::MaybeUninit;
 
 use crate::{make_progress, time_fn};
 use half::prelude::*;
-use indicatif::{style, ParallelProgressIterator};
-use ndarray::{s, Array, Array1, ArrayView, Dim};
+use ndarray::{Array, Array1, ArrayView, Dim};
 use rayon::prelude::*;
+use pyo3::prelude::*;
+use ouroboros::self_referencing;
 
 use crate::types::{DecoderGradientType, WeightGradientType};
 
@@ -22,28 +23,31 @@ pub struct BackwardPassContext<'a> {
     pub encoder_weights: &'a [bf16],
 }
 
-type OutputGradientType = Vec<Vec<bf16>>;
+#[pyclass]
+#[self_referencing]
+pub struct BackwardOutputs {
+    owner: Vec<WeightGradientType>,
+    #[borrows(owner)]
+    encoder_grads: &'this [WeightGradientType],
+    #[borrows(owner)]
+    decoder_grads: &'this [WeightGradientType],
+}
 
-fn compute_output_gradient(ctx: &BackwardPassContext) -> OutputGradientType {
-    (0..ctx.n)
-        .into_par_iter()
-        .map(|n| {
-            let target_embed_row = &ctx.target_embeds[n * ctx.m..(n + 1) * ctx.m];
-            let output_embed_row = &ctx.output_embeds[n * ctx.m..(n + 1) * ctx.m];
+fn get_output_grad_slice(ctx: &BackwardPassContext, n: usize, m_start: usize, m_end: usize) -> Vec<f32> {
+    let target_embed_row = &ctx.target_embeds[n * ctx.m..(n + 1) * ctx.m][m_start..m_end];
+    let output_embed_row = &ctx.output_embeds[n * ctx.m..(n + 1) * ctx.m][m_start..m_end];
 
-            let target_embed_row_nd = ArrayView::from_shape((ctx.m,), target_embed_row).unwrap();
-            let output_embed_row_nd = ArrayView::from_shape((ctx.m,), output_embed_row).unwrap();
+    let target_embed_row_nd = ArrayView::from_shape((ctx.m,), target_embed_row).unwrap();
+    let output_embed_row_nd = ArrayView::from_shape((ctx.m,), output_embed_row).unwrap();
 
-            let target_f32 = target_embed_row_nd.mapv(|x| (x as f32) / 127.5);
-            let output_f32 = output_embed_row_nd.mapv(|x| (x as f32) / 127.5);
-            Vec::from_f32_slice((target_f32 - output_f32).as_slice().unwrap())
-        })
-        .collect()
+    let target_f32 = target_embed_row_nd.mapv(|x| (x as f32) / 127.5);
+    let output_f32 = output_embed_row_nd.mapv(|x| (x as f32) / 127.5);
+    (target_f32 - output_f32).to_vec()
 }
 
 fn compute_grads(
     ctx: &BackwardPassContext,
-    output_grads: &OutputGradientType,
+    // output_grads: &OutputGradientType,
 ) -> Vec<DecoderGradientType> {
     let mut v = Vec::<f32>::with_capacity(ctx.n * ctx.k);
     make_progress!(v.spare_capacity_mut().par_chunks_mut(ctx.k).enumerate()).for_each(
@@ -57,7 +61,11 @@ fn compute_grads(
 
                     let decoder_row_nd = ArrayView::from_shape((ctx.m,), decoder_row).unwrap();
                     let decoder_row_f32 = decoder_row_nd.mapv(|x| x.to_f32());
-                    let output_gradient = Array1::from_shape_vec((ctx.m,), output_grads[n].as_slice().to_f32_vec()).unwrap();
+                    // let output_gradient = Array1::from_shape_vec((ctx.m,), output_grads[n].as_slice().to_f32_vec()).unwrap();
+                    let output_gradient = Array1::from_shape_vec(
+                        (ctx.m,),
+                        get_output_grad_slice(ctx, n, 0, ctx.m),
+                    ).unwrap();
 
                     let gradient = output_gradient.dot(&decoder_row_f32);
                     MaybeUninit::new(gradient)
@@ -72,19 +80,37 @@ fn compute_grads(
 
 fn weight_grads_fast<const M_CHUNK: usize>(
     ctx: &BackwardPassContext,
-    out_grads: &OutputGradientType,
+    // out_grads: &OutputGradientType,
     decoder_grads: &[DecoderGradientType],
-) -> (Vec<WeightGradientType>, Vec<WeightGradientType>) {
+) -> BackwardOutputs {
     let lm = ctx.l * ctx.m;
     let mut output_grads = (0..lm * 2)
         .into_par_iter()
         .map(|_| bf16::ZERO)
         .collect::<Vec<WeightGradientType>>();
+    // want to iterate over (2, m_chunks, [l, m_chunk])
+    // want to have (2, l, m_chunks, m_chunk)
+    // matrix transposition problem
+    // option:
+    // 1. (2, m_chunks, [l, m_chunk -> m_chunk, l])  (many inefficient memory accesses)
+    // 2. (2, m, l) -> (2, l, m)  (simple matrix transpose)
+
+    // another option: just use mutexes lol
+
+    panic!("not implemented");
+
     make_progress!(output_grads.par_chunks_mut(M_CHUNK * ctx.l).enumerate()).for_each(
         |(sl_start, outputs)| {
             let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
             let is_decoder = m_start >= ctx.m;
             let real_m_start = if is_decoder { m_start - ctx.m } else { m_start };
+
+                // let l = i / ctx.m;
+                // let m = i % ctx.m;
+                // let m_chunk_idx = m / M_CHUNK;
+                // let m_in_chunk = m % M_CHUNK;
+                // if is_decoder {lm} else {0} + m_chunk_idx * M_CHUNK * ctx.l + l * M_CHUNK + m_in_chunk
+
             for n in 0..ctx.n {
                 let mut big_elem: Box<Option<Array<f32, Dim<[usize; 1]>>>> = Box::new(None);
                 for k in 0..ctx.k {
@@ -93,10 +119,11 @@ fn weight_grads_fast<const M_CHUNK: usize>(
                     let is_none = (&big_elem).is_none();
                     if is_none {
                         big_elem = Box::new(Some(if is_decoder {
-                            let grad_row = &out_grads[n];
-                            let grad_chunk =
-                                &grad_row[real_m_start..real_m_start + M_CHUNK];
-                            Array1::from_shape_vec((M_CHUNK,), grad_chunk.to_f32_vec()).unwrap()
+                            // let grad_row = &out_grads[n];
+                            // let grad_chunk =
+                            //     &grad_row[real_m_start..real_m_start + M_CHUNK];
+                            // Array1::from_shape_vec((M_CHUNK,), grad_chunk.to_f32_vec()).unwrap()
+                            Array1::from_shape_vec((M_CHUNK,), get_output_grad_slice(ctx, n, real_m_start, real_m_start + M_CHUNK)).unwrap()
                         } else {
                             let input_embeds_i8 = &ctx.input_embeds
                                 [n * ctx.m + real_m_start..n * ctx.m + real_m_start + M_CHUNK];
@@ -115,7 +142,7 @@ fn weight_grads_fast<const M_CHUNK: usize>(
                     let elem = big_elem.clone().unwrap() * small_elem;
                     let grad_addition = &(&elem / (ctx.n as f32));
 
-                    let current_grad = outputs[l..l + M_CHUNK]
+                    let current_grad = outputs[l * M_CHUNK..l * M_CHUNK + M_CHUNK]
                         .iter()
                         .map(|x| x.to_f32())
                         .collect::<Vec<f32>>();
@@ -123,7 +150,7 @@ fn weight_grads_fast<const M_CHUNK: usize>(
                         ArrayView::from_shape((M_CHUNK,), &current_grad).unwrap();
                     let grad_new = grad_addition + &current_grad_array;
                     let grad_slice = grad_new.as_slice().unwrap();
-                    outputs[l..l + M_CHUNK].copy_from_slice(
+                    outputs[l * M_CHUNK..l * M_CHUNK + M_CHUNK].copy_from_slice(
                         grad_slice
                             .into_iter()
                             .map(|&x| bf16::from_f32(x))
@@ -134,41 +161,36 @@ fn weight_grads_fast<const M_CHUNK: usize>(
             }
         },
     );
-    let encoder_grads = (0..lm)
-        .into_par_iter()
-        .map(|i| {
-            let l = i / ctx.m;
-            let m = i % ctx.m;
-            let m_chunk_idx = m / M_CHUNK;
-            let m_in_chunk = m % M_CHUNK;
-            output_grads[m_chunk_idx * M_CHUNK * ctx.l + l * M_CHUNK + m_in_chunk]
-        })
-        .collect();
-    let decoder_grads = (0..lm)
-        .into_par_iter()
-        .map(|i| {
-            let l = i / ctx.m;
-            let m = i % ctx.m;
-            let m_chunk_idx = m / M_CHUNK;
-            let m_in_chunk = m % M_CHUNK;
-            output_grads[lm + m_chunk_idx * M_CHUNK * ctx.l + l * M_CHUNK + m_in_chunk]
-        })
-        .collect();
-    (encoder_grads, decoder_grads)
+    BackwardOutputsBuilder {
+        owner: output_grads,
+        encoder_grads_builder: |owner: &Vec<WeightGradientType>| &owner[0..lm],
+        decoder_grads_builder: |owner: &Vec<WeightGradientType>| &owner[lm..lm * 2],
+    }.build()
+
 }
 
-pub fn backward(ctx: &BackwardPassContext) -> (Vec<WeightGradientType>, Vec<WeightGradientType>) {
-    let output_grads = time_fn!(
-        compute_output_gradient(&ctx),
-        "Benchmarking compute_output_gradient..."
-    );
+pub fn backward(ctx: &BackwardPassContext) -> BackwardOutputs {
+    // println!("output grads");
+    // let output_grads = time_fn!(
+    //     compute_output_gradient(&ctx),
+    //     "Benchmarking compute_output_gradient..."
+    // );
+    println!("decoder grads");
     let decoder_grads = time_fn!(
-        compute_grads(&ctx, &output_grads),
+        compute_grads(
+            &ctx,
+            // &output_grads
+        ),
         "Benchmarking compute_grads..."
     );
-    let (encoder_grads, decoder_grads) = time_fn!(
-        weight_grads_fast::<{ 1 << 7 }>(&ctx, &output_grads, &decoder_grads),
+    println!("encoder grads");
+    let grads = time_fn!(
+        weight_grads_fast::<{ 1 << 7 }>(
+            &ctx,
+            // &output_grads,
+            &decoder_grads),
         "Benchmarking weight_grads_fast..."
     );
-    (encoder_grads, decoder_grads)
+    println!("done");
+    grads
 }

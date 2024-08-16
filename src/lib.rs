@@ -15,7 +15,7 @@ pub mod types;
 
 use adam::AdamState;
 use attempts::classic::beautiful_parallel_sparse_matmul;
-use backward::{backward, BackwardPassContext};
+use backward::{backward, BackwardOutputs, BackwardPassContext};
 use benchmarking::SparseMatmulContext;
 use half::bf16;
 use numpy::ndarray::Array2;
@@ -28,6 +28,11 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 fn transmute_u16_to_bf16(u16: &[u16]) -> &[bf16] {
     unsafe { std::mem::transmute::<&[u16], &[bf16]>(u16) }
+}
+
+fn transmute_bf16_to_u16_vec(bf16: Vec<bf16>) -> Vec<u16> {
+    // whatever
+    unsafe { std::mem::transmute::<Vec<bf16>, Vec<u16>>(bf16) }
 }
 
 macro_rules! assert_std_layout {
@@ -93,7 +98,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         sparse_weights: PyReadonlyArrayDyn<'py, u16>,
         sparse_indices: PyReadonlyArrayDyn<'py, u32>,
         output_embeds: PyReadonlyArrayDyn<'py, i8>,
-    ) -> Bound<'py, PyTuple> {
+    ) -> PyResult<Bound<'py, BackwardOutputs>> {
         assert_std_layout!(sparse_weights);
         assert_std_layout!(sparse_indices);
         assert_std_layout!(decoder_weights);
@@ -116,7 +121,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         let input_embeds_slice = input_embeds.as_slice().unwrap();
         let output_embeds_slice = output_embeds.as_slice().unwrap();
         let target_embeds_slice = target_embeds.as_slice().unwrap();
-        let (encoder_grad_nd, decoder_grad_nd) = Python::allow_threads(py, move || {
+        let outputs = Python::allow_threads(py, move || {
             let ctx = BackwardPassContext {
                 n: n as usize,
                 k: k as usize,
@@ -130,28 +135,9 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 sparse_weights: transmute_u16_to_bf16(sparse_weights_slice),
                 sparse_indices: sparse_indices_slice,
             };
-            let (encoder_grad, decoder_grad) = backward(&ctx);
-            let encoder_grad_nd = Array2::from_shape_vec(
-                [l, m],
-                encoder_grad.into_iter().map(|x| x.to_bits()).collect(),
-            )
-            .unwrap()
-            .into_dyn();
-            let decoder_grad_nd = Array2::from_shape_vec(
-                [l, m],
-                decoder_grad.into_iter().map(|x| x.to_bits()).collect(),
-            )
-            .unwrap()
-            .into_dyn();
-            (encoder_grad_nd, decoder_grad_nd)
+            backward(&ctx)
         });
-        PyTuple::new_bound(
-            py,
-            vec![
-                PyArrayDyn::from_owned_array_bound(py, encoder_grad_nd),
-                PyArrayDyn::from_owned_array_bound(py, decoder_grad_nd),
-            ],
-        )
+        Bound::new(py, outputs)
     }
 
     #[pyfn(m)]
@@ -222,6 +208,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     ) -> PyResult<()> {
         assert_std_layout!(grads);
         assert_std_layout!(weights);
+        println!("Transmutation time");
         let grads_slice_bf16 = unsafe { std::mem::transmute::<&[u16], &[bf16]>(grads.as_slice().unwrap()) };
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
