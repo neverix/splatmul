@@ -1,5 +1,7 @@
 #![feature(portable_simd)]
 #![feature(new_uninit)]
+use std::convert::identity;
+
 use half::bf16;
 use indicatif::ProgressIterator;
 use ndarray::{Array, ArrayView, Dim};
@@ -24,6 +26,7 @@ const M: usize = 1 << 14;
 // const K: usize = 64;
 // const L: usize = 1 << 12;
 // const M: usize = 1 << 14;
+const M_CHUNK: usize = 1 << 7;
 
 fn main() {
     let sparse_weights = generate_weights(N * K, 40.0);
@@ -47,7 +50,7 @@ fn main() {
     let mut adam = time_fn!(AdamState::new(1e-3, 0.9, 0.999, 1e-8, N * M, 16), "Adam initialization...");
     time_fn!({
         let grads = generate_weights(N * M, scale);
-        adam.update(grads.as_slice(), decoder_weights.as_mut_slice());
+        adam.update(grads.as_slice(), decoder_weights.as_mut_slice(), identity);
     }, "Adam update...");
     return;
 
@@ -100,5 +103,5 @@ fn main() {
     //     decoder_weights: &mut decoder_weights,
     //     encoder_weights: &mut encoder_weights,
     // };
-    // backward(&backward_ctx);
+    // backward::<M_CHUNK>(&backward_ctx);
 }

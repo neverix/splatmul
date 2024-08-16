@@ -44,6 +44,8 @@ macro_rules! assert_std_layout {
     };
 }
 
+const M_CHUNK: usize = 1 << 7;
+
 #[pymodule]
 fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     #[pyfn(m)]
@@ -135,7 +137,7 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
                 sparse_weights: transmute_u16_to_bf16(sparse_weights_slice),
                 sparse_indices: sparse_indices_slice,
             };
-            backward(&ctx)
+            backward::<M_CHUNK>(&ctx)
         });
         Bound::new(py, outputs)
     }
@@ -209,12 +211,23 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
         assert_std_layout!(grads);
         assert_std_layout!(weights);
         println!("Transmutation time");
+        let l = grads.as_array().shape()[0];
+        let m = grads.as_array().shape()[1];
         let grads_slice_bf16 = unsafe { std::mem::transmute::<&[u16], &[bf16]>(grads.as_slice().unwrap()) };
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
+        // start with (2, l, m_chunks, m_chunk)
+        // end with (2, m_chunks, l, m_chunk)
+        let gradient_remap = |i: usize| {
+            let m_chunks_i = i / M_CHUNK;
+            let l_i = i / m;
+            let lm_i = i / (l * m);
+            return lm_i * (l * m) + m_chunks_i * (l * M_CHUNK) + l_i * M_CHUNK + (i % M_CHUNK);
+        };
         adam.borrow_mut().update(
             grads_slice_bf16,
             weights_slice_bf16,
+            gradient_remap
         );
         Ok(())
     }

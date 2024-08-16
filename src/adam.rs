@@ -1,11 +1,9 @@
 use core::panic;
 use std::{
-    cmp::min,
-    simd::{
+    cmp::min, convert::identity, simd::{
         cmp::SimdPartialOrd, f32x16, f32x64, num::SimdFloat, LaneCount, Simd, SimdElement,
         SupportedLaneCount,
-    },
-    time::SystemTime,
+    }, time::SystemTime
 };
 
 use half::{bf16, slice::HalfFloatSliceExt, vec};
@@ -359,7 +357,7 @@ impl<const SIGNED: bool> BlockScaled<SIGNED> {
         let block_size = self.block_size;
         self.par_f32_for_each(|f32_chunk, i| {
             let mut array = ArrayViewMut1::from_shape((block_size,), f32_chunk).unwrap();
-            visitor(&mut array, i);
+            visitor(&mut array, i * block_size);
         });
     }
 
@@ -411,7 +409,7 @@ impl AdamState {
         }
     }
 
-    pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16]) {
+    pub fn update(&mut self, gradients: &[bf16], parameters: &mut [bf16], gradient_remap: impl Fn(usize) -> usize + Sync) {
         // update i
         self.t += 1;
         print!("update m");
@@ -420,7 +418,8 @@ impl AdamState {
             m.par_array_for_each(|m_chunk, i| {
                 *m_chunk *= self.beta1;
                 let mut dst = vec![0f32; self.block_size];
-                (&gradients[i..i + self.block_size]).convert_to_f32_slice(dst.as_mut_slice());
+                let i_grad = gradient_remap(i);
+                (&gradients[i_grad..i_grad + self.block_size]).convert_to_f32_slice(dst.as_mut_slice());
                 let mut grad_array = Array1::from_shape_vec((self.block_size,), dst).unwrap();
                 grad_array *= 1.0 - self.beta1;
                 *m_chunk += &grad_array;
@@ -431,7 +430,8 @@ impl AdamState {
         self.v.par_array_for_each(|v_chunk, i| {
             *v_chunk *= self.beta2;
             let mut dst = vec![0f32; self.block_size];
-            (&gradients[i..i + self.block_size]).convert_to_f32_slice(dst.as_mut_slice());
+            let i_grad = gradient_remap(i);
+            (&gradients[i_grad..i_grad + self.block_size]).convert_to_f32_slice(dst.as_mut_slice());
             let mut grad_array = Array1::from_shape_vec((self.block_size,), dst).unwrap();
             grad_array *= &grad_array.clone();
             if !grad_array.iter().all(|&x| x.is_finite()) {
@@ -479,7 +479,7 @@ fn test_adam_momentum_state() {
             .enumerate()
             .map(|(i, x)| bf16::from_f32(x.to_f32() - (i % 14) as f32))
             .collect::<Vec<bf16>>();
-        state.update(&gradients, &mut parameters);
+        state.update(&gradients, &mut parameters, identity);
         if i % 100 == 0 {
             println!("Step {}; first 32 parameters: {:?}", i, &parameters[0..32]);
         }

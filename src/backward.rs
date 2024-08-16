@@ -88,28 +88,12 @@ fn weight_grads_fast<const M_CHUNK: usize>(
         .into_par_iter()
         .map(|_| bf16::ZERO)
         .collect::<Vec<WeightGradientType>>();
-    // want to iterate over (2, m_chunks, [l, m_chunk])
-    // want to have (2, l, m_chunks, m_chunk)
-    // matrix transposition problem
-    // option:
-    // 1. (2, m_chunks, [l, m_chunk -> m_chunk, l])  (many inefficient memory accesses)
-    // 2. (2, m, l) -> (2, l, m)  (simple matrix transpose)
-
-    // another option: just use mutexes lol
-
-    panic!("not implemented");
 
     make_progress!(output_grads.par_chunks_mut(M_CHUNK * ctx.l).enumerate()).for_each(
         |(sl_start, outputs)| {
             let m_start = (sl_start * M_CHUNK) % (ctx.m * 2);
             let is_decoder = m_start >= ctx.m;
             let real_m_start = if is_decoder { m_start - ctx.m } else { m_start };
-
-                // let l = i / ctx.m;
-                // let m = i % ctx.m;
-                // let m_chunk_idx = m / M_CHUNK;
-                // let m_in_chunk = m % M_CHUNK;
-                // if is_decoder {lm} else {0} + m_chunk_idx * M_CHUNK * ctx.l + l * M_CHUNK + m_in_chunk
 
             for n in 0..ctx.n {
                 let mut big_elem: Box<Option<Array<f32, Dim<[usize; 1]>>>> = Box::new(None);
@@ -169,7 +153,7 @@ fn weight_grads_fast<const M_CHUNK: usize>(
 
 }
 
-pub fn backward(ctx: &BackwardPassContext) -> BackwardOutputs {
+pub fn backward<const M_CHUNK: usize>(ctx: &BackwardPassContext) -> BackwardOutputs {
     // println!("output grads");
     // let output_grads = time_fn!(
     //     compute_output_gradient(&ctx),
@@ -185,7 +169,7 @@ pub fn backward(ctx: &BackwardPassContext) -> BackwardOutputs {
     );
     println!("encoder grads");
     let grads = time_fn!(
-        weight_grads_fast::<{ 1 << 7 }>(
+        weight_grads_fast::<M_CHUNK>(
             &ctx,
             // &output_grads,
             &decoder_grads),
