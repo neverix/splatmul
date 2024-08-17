@@ -21,7 +21,7 @@ use half::bf16;
 use numpy::ndarray::Array2;
 use numpy::{PyArrayDyn, PyReadonlyArrayDyn, PyReadwriteArrayDyn};
 use pyo3::prelude::*;
-use pyo3::types::PyInt;
+use pyo3::types::{PyBool, PyInt};
 use pyo3::types::PyFloat;
 use pyo3::types::PyTuple;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -205,24 +205,29 @@ fn splatmul<'py>(m: Bound<'py, PyModule>) -> PyResult<()> {
     fn splatmat_py<'py>(
         _py: Python<'py>,
         adam: Bound<'py, AdamState>,
-        grads: PyReadonlyArrayDyn<'py, u16>,
+        grads: Bound<'py, BackwardOutputs>,
         mut weights: PyReadwriteArrayDyn<'py, u16>,
+        is_decoder: Bound<'py, PyBool>,
     ) -> PyResult<()> {
-        assert_std_layout!(grads);
         assert_std_layout!(weights);
-        println!("Transmutation time");
-        let l = grads.as_array().shape()[0];
-        let m = grads.as_array().shape()[1];
-        let grads_slice_bf16 = unsafe { std::mem::transmute::<&[u16], &[bf16]>(grads.as_slice().unwrap()) };
+        let borrowed_grads = grads.borrow();
+        let grads_slice_bf16 = *if is_decoder.is_true() {
+            borrowed_grads.borrow_decoder_grads()
+        } else {
+            borrowed_grads.borrow_encoder_grads()
+        };
+        let l = weights.as_array().shape()[0];
+        let m = weights.as_array().shape()[1];
         let weights_slice = weights.as_slice_mut().unwrap();
         let weights_slice_bf16 = unsafe { std::mem::transmute::<&mut [u16], &mut [bf16]>(weights_slice) };
         // start with (2, l, m_chunks, m_chunk)
         // end with (2, m_chunks, l, m_chunk)
         let gradient_remap = |i: usize| {
-            let m_chunks_i = i / M_CHUNK;
-            let l_i = i / m;
-            let lm_i = i / (l * m);
-            return lm_i * (l * m) + m_chunks_i * (l * M_CHUNK) + l_i * M_CHUNK + (i % M_CHUNK);
+            let lm_chunks_i = i / (l * m);
+            let l_i = (i % (l * m)) / m;
+            let m_chunks_i = (i % m) / M_CHUNK;
+            let new_i = lm_chunks_i * (l * m) + m_chunks_i * (M_CHUNK * l) + l_i * M_CHUNK + (i % M_CHUNK);
+            new_i
         };
         adam.borrow_mut().update(
             grads_slice_bf16,

@@ -28,17 +28,17 @@ pub struct BackwardPassContext<'a> {
 pub struct BackwardOutputs {
     owner: Vec<WeightGradientType>,
     #[borrows(owner)]
-    encoder_grads: &'this [WeightGradientType],
+    pub encoder_grads: &'this [WeightGradientType],
     #[borrows(owner)]
-    decoder_grads: &'this [WeightGradientType],
+    pub decoder_grads: &'this [WeightGradientType],
 }
 
 fn get_output_grad_slice(ctx: &BackwardPassContext, n: usize, m_start: usize, m_end: usize) -> Vec<f32> {
-    let target_embed_row = &ctx.target_embeds[n * ctx.m..(n + 1) * ctx.m][m_start..m_end];
-    let output_embed_row = &ctx.output_embeds[n * ctx.m..(n + 1) * ctx.m][m_start..m_end];
+    let target_embed_row = &ctx.target_embeds[n * ctx.m + m_start..n * ctx.m + m_end];
+    let output_embed_row = &ctx.output_embeds[n * ctx.m + m_start..n * ctx.m + m_end];
 
-    let target_embed_row_nd = ArrayView::from_shape((ctx.m,), target_embed_row).unwrap();
-    let output_embed_row_nd = ArrayView::from_shape((ctx.m,), output_embed_row).unwrap();
+    let target_embed_row_nd = ArrayView::from_shape((m_end - m_start,), target_embed_row).unwrap();
+    let output_embed_row_nd = ArrayView::from_shape((m_end - m_start,), output_embed_row).unwrap();
 
     let target_f32 = target_embed_row_nd.mapv(|x| (x as f32) / 127.5);
     let output_f32 = output_embed_row_nd.mapv(|x| (x as f32) / 127.5);
@@ -159,7 +159,6 @@ pub fn backward<const M_CHUNK: usize>(ctx: &BackwardPassContext) -> BackwardOutp
     //     compute_output_gradient(&ctx),
     //     "Benchmarking compute_output_gradient..."
     // );
-    println!("decoder grads");
     let decoder_grads = time_fn!(
         compute_grads(
             &ctx,
@@ -167,7 +166,6 @@ pub fn backward<const M_CHUNK: usize>(ctx: &BackwardPassContext) -> BackwardOutp
         ),
         "Benchmarking compute_grads..."
     );
-    println!("encoder grads");
     let grads = time_fn!(
         weight_grads_fast::<M_CHUNK>(
             &ctx,
@@ -175,6 +173,5 @@ pub fn backward<const M_CHUNK: usize>(ctx: &BackwardPassContext) -> BackwardOutp
             &decoder_grads),
         "Benchmarking weight_grads_fast..."
     );
-    println!("done");
     grads
 }
